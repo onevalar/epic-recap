@@ -1,13 +1,16 @@
 const app = document.getElementById('app');
 const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
 const tabId = Number(new URLSearchParams(location.search).get('tab')) || activeTab?.id;
-const prefs = await chrome.storage.local.get(['prefVideo', 'manualNote', 'continuousNote']);
+const prefs = await chrome.storage.local.get(['prefVideo', 'manualNote', 'continuousNote', 'manualExpected', 'continuousExpected']);
 const { dismissedExportId } = await chrome.storage.session.get('dismissedExportId');
-const ui = { route: null, video: prefs.prefVideo !== false, continuous: false, multi: false,
+const ui = { route: null, video: prefs.prefVideo === true, continuous: false, multi: false,
   picked: new Set(), sites: new Set(), query: '', range: 10, mode: null, dismissed: dismissedExportId,
   notes: { manual: prefs.manualNote || '', continuous: prefs.continuousNote || '' },
+  expected: { manual: prefs.manualExpected || '', continuous: prefs.continuousExpected || '' },
+  markerNote: '', coverage: null,
   message: '', busy: false, initialized: false, exportResult: null, confirmFrom: null };
 let state = null, candidates = [], refreshing = false, lastCandidatesAt = 0, signature = '';
+let pendingFocus = null;
 const pad = n => String(n).padStart(2, '0');
 const mmss = ms => { const s = Math.max(0, Math.floor(ms / 1000)); return `${pad(Math.floor(s / 60))}:${pad(s % 60)}`; };
 const hhmm = t => { const d = new Date(t); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
@@ -28,7 +31,7 @@ const actions = (...children) => el('div', { className:'actions' }, ...children)
 const badge = (text, kind = '') => el('span', { className:`badge ${kind}`, textContent:text });
 const brand = () => el('header', { className:'brand' }, el('img', { src:'assets/07f59.png', width:24, height:24, alt:'' }), el('h1', { textContent:'Epic Recap' }));
 function button(label, action, kind = 'primary', disabled = false, id = '') {
-  return el('button', { type:'button', className:`btn ${kind}`, textContent:label, disabled:disabled || ui.busy, id, onclick:action });
+  return el('button', { type:'button', className:`btn ${kind}`, textContent:label, disabled:disabled || ui.busy, id:id || `button-${label}`, onclick:action });
 }
 function nav(label, action) { return el('button', { type:'button', className:'nav', onclick:action, disabled:ui.busy }, icon('arrow'), label); }
 function host(url) { try { return new URL(url).host || url; } catch { return url || ''; } }
@@ -51,13 +54,13 @@ function mode() { return ui.mode || (state?.session ? 'manual' : 'continuous'); 
 function subject() { return mode() === 'manual' ? state?.session : state?.continuous; }
 function route() {
   if (!state) return 'loading';
-  if (ui.route) return ui.route;
   const task = state.exportTask;
   if (task && task.id !== ui.dismissed) {
     if (task.status === 'exporting') return 'exporting';
     if (task.status === 'failed') return 'exportError';
     if (task.status === 'complete') return 'success';
   }
+  if (ui.route) return ui.route;
   if (state.session?.active) return state.session.isMember ? 'recording' : 'other';
   if (state.session) return 'stopped';
   if (state.continuous?.active) return 'continuous';
@@ -97,7 +100,7 @@ async function refresh(forceCandidates = false) {
   } catch (err) { ui.message = err.message; }
   finally { refreshing = false; render(); }
 }
-function showMessage() { return ui.message ? el('p', { className:'message', role:'alert', textContent:ui.message }) : null; }
+function showMessage() { return ui.message ? el('p', { className:'message', textContent:ui.message }) : null; }
 function setVideo(on) {
   ui.video = on; chrome.storage.local.set({ prefVideo:on }).catch(err => { ui.message=err.message; render(true); }); render(true);
 }
@@ -108,16 +111,29 @@ async function focusTab(id) {
     await chrome.tabs.update(id, { active:true }); window.close();
   } catch { ui.message='页面已关闭。'; await refresh(); }
 }
-function openPicker() { ui.multi=true; ui.query=''; navigate('multi'); refresh(true); }
+function openPicker() { ui.multi=true; ui.query=''; navigate('multi'); refresh(true); updateCoverage(); }
+async function updateCoverage() {
+  if (!ui.continuous) return;
+  const origins = ui.multi ? [...ui.sites] : [state.origin];
+  try {
+    const coverage = await call('coverage', { origins });
+    if (JSON.stringify(origins) !== JSON.stringify(ui.multi ? [...ui.sites] : [state.origin])) return;
+    ui.coverage = coverage; render(true);
+  } catch (err) { ui.message = err.message; render(true); }
+}
 function homeView() {
   const ready = state.pageReady && state.origin;
-  return [brand(), identity(), button(ready?'开始记录':state.origin?'刷新页面后开始':'此页面无法记录', () => run(start), 'primary', !ready, 'start'),
-    !ready && state.origin ? button('去刷新页面', () => focusTab(tabId), 'quiet') : null,
-    el('div', { className:'divider' }), el('div', { className:'config' },
-      setting(ui.continuous?'录制视频 · 此模式不可用':'录制视频', ui.continuous?false:ui.video, setVideo, { disabled:ui.continuous, id:'video' }),
-      setting('持续记录', ui.continuous, on => { ui.continuous=on; render(true); }, { id:'continuous' })),
-    ui.continuous ? el('div', { className:'card' }, p('同站点页面自动加入 · 不含视频','small muted'), p('较早记录会自动覆盖','small muted')) : null,
-    el('button', { className:'link-row', type:'button', onclick:openPicker }, icon('tabs'), p(ui.continuous?'选择多个站点':'同时记录多个页面','grow'),icon('chevron'))];
+  const modes = el('fieldset', { className:'mode-options' }, el('legend', { className:'sr-only', textContent:'记录方式' }),
+    ...[[false,'manual','复现问题','手动开始与停止，最长 10 分钟'],[true,'continuous','等待偶发问题','持续回溯，较早内容覆盖，不含视频']].map(([continuous,id,label,description]) =>
+      el('label',{className:'mode-option'},el('input',{type:'radio',name:'mode',id,checked:ui.continuous===continuous,
+        onchange:()=>{ui.continuous=continuous;render(true);updateCoverage();}}),stack(p(label,'semibold'),p(description,'small muted')))));
+  return [brand(), identity(), modes,
+    setting(ui.continuous?'视频在此模式下不可用':'视频（含页面声音）',ui.continuous?false:ui.video,setVideo,{disabled:ui.continuous,id:'video'}),
+    el('button', { className:'link-row', id:'choose-pages', type:'button', onclick:openPicker },icon('tabs'),p(ui.continuous?'选择多个站点':'同时记录多个页面','grow'),icon('chevron')),
+    ui.continuous&&ui.coverage?p(`将记录 ${ui.coverage.selected.length} 个页面${ui.coverage.waiting.length?`，${ui.coverage.waiting.length} 个等待名额`:''}；空位自动补入。`,'small muted'):null,
+    p('仅保存在本机。记录操作、请求、日志与截图；分享前可检查、遮挡或移除附件。','small muted'),
+    button(ready?'开始记录':state.origin?'刷新页面后开始':'此页面无法记录',()=>run(start),'primary',!ready,'start'),
+    !ready&&state.origin?button('返回页面，手动刷新',()=>focusTab(tabId),'quiet'):null];
 }
 function siteCandidates() {
   const groups = new Map();
@@ -139,7 +155,7 @@ function multiView() {
     const key = ui.continuous ? c.origin : c.tabId, on = picked.has(key);
     const disabled = !c.available || (!on && picked.size >= state.limits.tabs);
     const input = el('input', { type:'checkbox', checked:on, disabled:disabled || ui.busy, id:`candidate-${key}`, 'aria-label':c.title || c.label,
-      onchange:() => { if (input.checked) picked.add(key); else picked.delete(key); render(true); } });
+      onchange:() => { if (input.checked) picked.add(key); else picked.delete(key); render(true); updateCoverage(); } });
     const subtitle = !c.available || ui.continuous ? c.reason : `${host(c.url)}${c.current?' · 当前页面':''}`;
     list.append(el('label', { className:'candidate', title:c.url }, input, el('div', { className:'grow' },
       p(c.title || c.label || '未命名页面', 'candidate-title ellipsis'), p(subtitle,'small muted ellipsis'))));
@@ -148,7 +164,8 @@ function multiView() {
   return [nav(ui.continuous?'选择站点':'选择页面', () => { ui.multi=false; navigate('home'); }),
     el('div', { className:'search' },icon('search'),search),row(p(`已选择 ${picked.size} / ${state.limits.tabs}`,'medium semibold grow'),p(picked.size===state.limits.tabs?'已达上限':`最多 ${state.limits.tabs} 个`,'small muted')),list,
     el('div', { className:'picker-footer' },el('div',{className:'divider'}),
-      ui.continuous ? p('同时记录最多 4 个页面 · 不含视频','small muted') : setting('录制视频',ui.video,setVideo,{id:'multi-video'}),
+      ui.continuous ? p(ui.coverage?`实际记录 ${ui.coverage.selected.length} 个页面，${ui.coverage.waiting.length} 个等待。优先覆盖每个站点，当前页优先。`:'同时记录最多 4 个页面；每个站点优先覆盖。','small muted') : setting('视频（含页面声音）',ui.video,setVideo,{id:'multi-video'}),
+      ui.continuous&&ui.coverage?.selected.length?el('details',{},el('summary',{textContent:'查看实际记录页面'}),...ui.coverage.selected.map(t=>p(t.title,'small'))):null,
       button(picked.size?`开始记录 · ${picked.size} 个${ui.continuous?'站点':'页面'}`:'选择页面后开始',()=>run(start),'primary',!picked.size,'start'))];
 }
 async function start() {
@@ -160,6 +177,13 @@ async function start() {
 function metrics(t = {}) {
   return el('div',{className:'metric-grid'},...[[t.errors||0,'页面报错'],[t.failedRequests||0,'失败请求']].map(([value,label]) =>
     el('div',{className:'metric'},el('strong',{textContent:value}),p(label,'small muted'))));
+}
+function markerControl(enabled) {
+  const input = el('input',{id:'marker-note',className:'text-input',placeholder:'补充一句说明（可选）',value:ui.markerNote,maxLength:500,'aria-label':'问题标记说明',
+    oninput:e=>{ui.markerNote=e.target.value;}});
+  return stack(input,button('标记问题发生在这里',()=>run(async()=>{
+    const mark=await call('mark',{note:ui.markerNote});ui.markerNote='';ui.message=`已标记 ${hhmm(mark.t)}，报告会突出这一刻。`;
+  }),'secondary',!enabled,'mark-problem'),state.markers?.length?p(`已保留 ${state.markers.length} 个问题标记`,'small muted'):null);
 }
 function members() {
   const s=state.session;
@@ -184,7 +208,7 @@ function manualView(other=false) {
   return [!s.isMember?nav('正在记录的页面',()=>navigate('other','manual')):brand(),status,
     el('div',{className:'time-block'},p(mmss(Date.now()-s.startedAt),'time'),p('10 分钟自动停止','small muted')),
     s.members.length===1 && s.isMember ? identity() : members(),
-    metrics(s.totals),button('停止记录',()=>run(()=>stop('manual')),'stop')];
+    metrics(s.totals),markerControl(s.isMember),button('停止记录',()=>run(()=>stop('manual')),'stop')];
 }
 async function stop(which) {
   await call(which==='manual'?'stop':'continuous-off');
@@ -195,9 +219,12 @@ function continuousView() {
   const c=state.continuous;
   return [brand(),badge(c.recording.length?'持续记录中':'等待页面',c.recording.length?'continuous':'warning'),
     el('div',{className:'time-block'},p(c.oldest?`${hhmm(c.oldest)} — ${hhmm(c.newest || Date.now())}`:'暂无记录','window'),p('当前可导出的时间范围','small muted')),
-    el('div',{className:'card site-list'},...c.origins.map(o => row(icon('siteSmall'),p(o.host,'medium semibold grow ellipsis'),badge(o.count?`${o.count} 个页面`:'等待页面',o.count?'':'warning')))),
+    el('div',{className:'card site-list'},...c.origins.map(o => row(icon('siteSmall'),p(o.host,'medium semibold grow ellipsis'),badge(o.count?`${o.count} 个记录${o.waiting?` · ${o.waiting} 个等待`:''}`:'尚未记录',o.count?'':'warning')))),
     c.inGroup&&!c.thisTabRecording ? p(c.full?'已达 4 个页面上限，当前页未记录。':state.pageReady?'此页面等待接入记录。':'刷新当前页面后可继续记录。','small muted') : null,
+    !c.inGroup?p('当前页面不在记录范围内。','small muted'):null,
+    c.waiting?.length?p('等待页面将在空出名额后自动加入。','small muted'):null,
     c.recording.length?metrics(c.totals):null,
+    markerControl(c.thisTabRecording),
     actions(button('导出片段',()=>{ui.range=10;navigate('range','continuous');},'primary',!c.oldest),button('停止持续记录',()=>run(()=>stop('continuous')),'quiet'))];
 }
 function summary(which=mode()) {
@@ -210,12 +237,25 @@ function summary(which=mode()) {
 }
 function stoppedView() {
   const s=subject();
-  return [brand(),badge('记录已停止'),el('h2',{textContent:mode()==='manual'?'记录完成':'记录已保留'}),summary(),
+  return [brand(),el('h2',{textContent:s.recovered?'已找回上次记录':'记录已保留'}),summary(),
+    s.recovered?p(s.stopReason==='restart'?'已恢复到最后一次自动保存；意外关闭前尚未保存的操作及未完成视频可能缺失。':'可以继续检查并导出，不需要重新复现问题。','small muted'):null,
+    ...(s.members||[]).filter(m=>m.videoError).map(m=>p(m.videoError,'small error')),
     s.stopReason==='auto'?p('已到 10 分钟，自动停止','small muted'):null,
     mode()==='continuous'?p('导出范围：全部可用记录','medium semibold'):null,
-    actions(button('直接导出',()=>run(()=>doExport()),'primary',mode()==='continuous'&&!s.oldest),
-      button('添加备注并导出',()=>navigate('note'),'quiet',mode()==='continuous'&&!s.oldest),
-      button('放弃这次记录',()=>{ui.confirmFrom='stopped';navigate('discard');},'quiet'))];
+    problemFields(),
+    actions(button('检查并导出',()=>run(openReview),'primary',mode()==='continuous'&&!s.oldest),
+      button('放弃这次记录',()=>{ui.confirmFrom='stopped';navigate('discard');},'text'))];
+}
+function problemFields() {
+  const which=mode();
+  return stack(...[['note','发生了什么（可选）','例如：点击保存后一直转圈',ui.notes,which==='manual'?'manualNote':'continuousNote'],
+    ['expected','预期怎样（可选）','例如：保存成功并返回列表',ui.expected,which==='manual'?'manualExpected':'continuousExpected']].map(([id,label,placeholder,values,key])=>
+    stack(el('label',{htmlFor:id,className:'small semibold',textContent:label}),el('textarea',{id,className:'compact-note',value:values[which],placeholder,maxLength:10000,
+      oninput:e=>{values[which]=e.target.value;chrome.storage.local.set({[key]:e.target.value}).catch(()=>{ui.message='说明未保存，请重试。';render(true);});}}))));
+}
+async function openReview() {
+  await call('prepare-review',{mode:mode(),note:ui.notes[mode()],expected:ui.expected[mode()],minutes:state.continuous?.stoppedAt?0:ui.range});
+  ui.message='已打开独立检查页，关闭面板不会丢失记录。';
 }
 function interval() {
   if(mode()==='manual')return `本次记录 · ${mmss(state.session.stoppedAt-state.session.startedAt)}`;
@@ -227,24 +267,15 @@ function rangeView() {
     el('div',{className:'range-options'},...[5,10,20,0].map(minutes=>el('label',{className:'range-option'},
       el('input',{type:'radio',id:`range-${minutes}`,name:'range',value:minutes,checked:ui.range===minutes,onchange:()=>{ui.range=minutes;ui.message='';render(true);}}),
       p(minutes?`最近 ${minutes} 分钟`:'全部可用记录','grow'),icon('check')))),p(interval(),'medium semibold muted'),
-    actions(button('直接导出',()=>run(()=>doExport()),'primary',!state.continuous.oldest),button('添加备注并导出',()=>navigate('note','continuous'),'quiet',!state.continuous.oldest))];
-}
-function noteView() {
-  const backRoute=mode()==='continuous'&&state.continuous.active?'range':'stopped';
-  const note=el('textarea',{id:'note',value:ui.notes[mode()],placeholder:'描述发生了什么，以及预期的结果',maxLength:10000,'aria-label':'备注',oninput:e=>{
-    const which=mode();ui.notes[which]=e.target.value;chrome.storage.local.set({[which==='manual'?'manualNote':'continuousNote']:e.target.value});
-  }});
-  return [nav('添加备注',()=>navigate(backRoute)),mode()==='continuous'&&state.continuous.active?badge('记录仍在继续','continuous'):null,
-    el('label',{htmlFor:'note',className:'medium semibold',textContent:'备注'}),note,row(icon('clock'),p(interval(),'small muted')),
-    actions(button('导出',()=>run(()=>doExport(true))),button('取消',()=>navigate(backRoute),'quiet'))];
+    button('检查并导出',()=>run(openReview),'primary',!state.continuous.oldest)];
 }
 async function dismissTask() {
   ui.dismissed=state.exportTask?.id; await chrome.storage.session.set({dismissedExportId:ui.dismissed});
 }
-async function doExport(withNote=false,retry=false) {
+async function doExport() {
   ui.mode=mode();ui.route='exporting';render(true);
   try {
-    ui.exportResult=await call(ui.mode==='manual'?'export':'export-range',{note:withNote?ui.notes[ui.mode]:'',minutes:state.continuous?.stoppedAt?0:ui.range,retry});
+    ui.exportResult=await call(state.exportTask?.reviewId?'export-reviewed':ui.mode==='manual'?'export':'export-range',{id:state.exportTask?.reviewId,retry:true});
     ui.route='success';
   } catch(err) {
     ui.route=null;
@@ -268,6 +299,7 @@ function successView() {
       p(result.mode==='continuous'?`${hhmm(result.startedAt)} — ${hhmm(result.endedAt)}`:`本次记录 · ${mmss(result.endedAt-result.startedAt)}`,'medium muted'),continuing?badge('记录仍在继续','continuous'):null),
     el('div',{className:'card'},p(result.folder.replace('/',' /\n'),'folder'),p(result.contents?.join('、')||`${result.fileCount} 个文件`,'small muted')),
     button('打开文件夹',()=>chrome.downloads.show(result.reportId).catch(()=>chrome.downloads.showDefaultFolder()),'secondary'),
+    result.aiText?button('复制给 AI 的说明',()=>run(async()=>{await navigator.clipboard.writeText(result.aiText);ui.message='已复制，请将说明和导出附件一起发送。';}),'secondary'):null,
     button(continuing?'返回记录':'开始新的记录',()=>run(async()=>{
       if(continuing){await dismissTask();ui.route='continuous';ui.exportResult=null;}
       else await reset(false);
@@ -275,38 +307,58 @@ function successView() {
 }
 async function reset(discard) {
   const which=mode();await call(which==='manual'?'close':'continuous-close',{discard});
-  ui.notes[which]='';ui.route=null;ui.mode=null;ui.exportResult=null;ui.continuous=false;ui.multi=false;ui.picked=new Set(state.pageReady?[tabId]:[]);ui.sites=new Set(state.origin?[state.origin]:[]);
+  ui.notes[which]='';ui.expected[which]='';ui.markerNote='';ui.route=null;ui.mode=null;ui.exportResult=null;ui.continuous=false;ui.multi=false;ui.picked=new Set(state.pageReady?[tabId]:[]);ui.sites=new Set(state.origin?[state.origin]:[]);
 }
 function discardView() {
   return [brand(),badge('放弃记录','warning'),el('h3',{textContent:'放弃这次记录？'}),p('已记录的内容和备注将被删除，无法恢复。','muted'),
-    button('放弃并开始新的记录',()=>run(()=>reset(true))),button('返回',()=>navigate(ui.confirmFrom||'stopped'),'secondary')];
+    button('返回，保留记录',()=>navigate(ui.confirmFrom||'stopped'),'secondary'),button('放弃并开始新的记录',()=>run(()=>reset(true)),'danger')];
 }
 function render(force=false) {
   const current=route();
   // Typing and range selection do not rerender from live sampling updates.
-  const data=['note','discard'].includes(current)?{run:subject()?.startedAt}:state;
+  const data=['stopped','discard','range','success','exporting','exportError'].includes(current)
+    ?{run:subject()?.startedAt,active:subject()?.active,task:state?.exportTask}
+    :state&&{tabId:state.tabId,title:state.title,url:state.url,origin:state.origin,pageReady:state.pageReady,markers:state.markers,
+      session:state.session&&{...state.session,totals:{errors:state.session.totals.errors,failedRequests:state.session.totals.failedRequests}},
+      continuous:state.continuous&&{...state.continuous,newest:state.continuous.newest&&hhmm(state.continuous.newest)}};
   const next=JSON.stringify({current,data,video:ui.video,continuous:ui.continuous,multi:ui.multi,query:ui.query,range:ui.range,
-    picked:[...ui.picked],sites:[...ui.sites],message:ui.message,busy:ui.busy,candidates:current==='multi'?candidates:null});
+    picked:[...ui.picked],sites:[...ui.sites],coverage:ui.coverage,message:ui.message,busy:ui.busy,candidates:current==='multi'?candidates:null});
   if(!force&&next===signature){for(const t of app.querySelectorAll('.time'))if(state?.session)t.textContent=mmss(Date.now()-state.session.startedAt);return;}
   signature=next;
-  const focused=document.activeElement, focusId=focused?.id, position=typeof focused?.selectionStart==='number'?[focused.selectionStart,focused.selectionEnd]:null;
+  const focused=document.activeElement, focusId=focused?.id || pendingFocus, position=typeof focused?.selectionStart==='number'?[focused.selectionStart,focused.selectionEnd]:null;
+  const changedView=app.dataset.view&&app.dataset.view!==current;
+  if(focusId)pendingFocus=focusId;
   const scroll=app.querySelector('#candidates')?.scrollTop||0;
   let children;
   switch(current){
     case 'home':children=homeView();break;case 'multi':children=multiView();break;
     case 'recording':children=manualView();break;case 'other':children=manualView(true);break;
     case 'continuous':children=continuousView();break;case 'stopped':children=stoppedView();break;
-    case 'range':children=rangeView();break;case 'note':children=noteView();break;
+    case 'range':children=rangeView();break;
     case 'exporting':children=exportView();break;case 'exportError':children=exportView(true);break;
     case 'success':children=successView();break;case 'discard':children=discardView();break;
     default:children=[brand(),p(ui.message?'无法读取记录':'正在读取记录…','muted'),ui.message?button('重试',()=>refresh(true),'secondary'):null];
   }
   app.dataset.view=current;app.setAttribute('aria-busy',ui.busy?'true':'false');
   app.replaceChildren(...children.filter(Boolean),...((ui.message&&current!=='exportError')?[showMessage()]:[]));
+  for(const n of app.querySelectorAll('button'))if(!n.id)n.id=`control-${n.textContent}`;
   const list=app.querySelector('#candidates');if(list)list.scrollTop=scroll;
-  if(focusId){const n=document.getElementById(focusId);if(n){n.focus({preventScroll:true});if(position&&n.setSelectionRange)try{n.setSelectionRange(...position);}catch{}}}
+  if(focusId){const n=document.getElementById(focusId);if(n&&!n.disabled){n.focus({preventScroll:true});pendingFocus=null;if(position&&n.setSelectionRange)try{n.setSelectionRange(...position);}catch{}}}
+  if(changedView&&!ui.busy&&!app.contains(document.activeElement)){
+    const heading=app.querySelector('h2,h1,.nav');if(heading){heading.tabIndex=-1;heading.focus({preventScroll:true});}pendingFocus=null;
+  }
+  document.getElementById('announcements').textContent=ui.message||(changedView?({recording:'记录已开始',continuous:'持续记录已开始',stopped:'记录已保存',success:'导出已完成'}[current]||''):'');
 }
 
 try { await call('video-authorize'); } catch { ui.message='视频未开启，页面数据仍在记录。'; }
+chrome.storage.onChanged.addListener((changes,area)=>{
+  if(area!=='local')return;
+  let changed=false;
+  for(const which of ['manual','continuous']){
+    if(changes[`${which}Note`]){ui.notes[which]=changes[`${which}Note`].newValue||'';changed=true;}
+    if(changes[`${which}Expected`]){ui.expected[which]=changes[`${which}Expected`].newValue||'';changed=true;}
+  }
+  if(changed&&!['note','expected'].includes(document.activeElement?.id))render(true);
+});
 await refresh(true);
 setInterval(()=>refresh(),1000);

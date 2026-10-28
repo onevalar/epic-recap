@@ -17,8 +17,7 @@
   const STORE_KEY = window === top ? '__epicTS' : `__epicTS:${location.pathname}`;
   // The recording flag, by contrast, is shared by every same-origin frame in the tab.
   const REC_KEY = '__epicTS:rec';
-  const MASK = '******';
-  const SENSITIVE = /authorization|cookie|token|secret|passw|pwd|api[-_]?key|session|credential|csrf|xsrf/i;
+  const { MASK, SENSITIVE, redactText, redactValue: redactDeep } = globalThis.__epicRecapPrivacy;
 
   const now = () => Date.now();
   const clip = (s, n) => (s.length > n ? `${s.slice(0, n)}…（已截断，原长 ${s.length} 字符）` : s);
@@ -108,7 +107,7 @@
   const newId = () => now().toString(36) + Math.random().toString(36).slice(2, 8);
 
   function record(type, data) {
-    const entry = { id: newId(), t: now(), type, page: location.href, ...data };
+    const entry = { id: newId(), t: now(), type, page: redactUrl(location.href), ...data };
     events.push(entry);
     track(entry);
     prune();
@@ -173,7 +172,9 @@
     }
   }
 
-  rec = readRec();
+  // The extension, not a restored page's sessionStorage, decides whether to resume.
+  // This also prevents a browser restart from silently recording without a badge.
+  rec = null;
   scheduleAutoStop();
   setTimeout(tick, 1000);
 
@@ -207,33 +208,8 @@
 
   // ---------- value formatting & masking ----------
 
-  function redactDeep(value, depth = 0) {
-    if (depth > 8 || value === null || typeof value !== 'object') return value;
-    if (Array.isArray(value)) return value.map((v) => redactDeep(v, depth + 1));
-    const out = {};
-    for (const [k, v] of Object.entries(value)) out[k] = SENSITIVE.test(k) ? MASK : redactDeep(v, depth + 1);
-    return out;
-  }
-
-  function redactText(text) {
-    if (!text) return text;
-    try { return JSON.stringify(redactDeep(JSON.parse(text))); } catch {}
-    // form-encoded bodies: a=1&token=xxx
-    if (/^[^\s=&]+=[^&]*(&[^\s=&]+=[^&]*)*$/.test(text)) {
-      return text.split('&').map((p) => {
-        const [k] = p.split('=');
-        return SENSITIVE.test(decodeURIComponent(k)) ? `${k}=${MASK}` : p;
-      }).join('&');
-    }
-    return text;
-  }
-
   function redactUrl(u) {
-    try {
-      const url = new URL(u, location.href);
-      for (const k of [...url.searchParams.keys()]) if (SENSITIVE.test(k)) url.searchParams.set(k, MASK);
-      return url.href;
-    } catch { return String(u); }
+    return globalThis.__epicRecapPrivacy.redactUrl(u, location.href);
   }
 
   function headersToObject(h) {
@@ -249,7 +225,7 @@
 
   function redactHeaders(obj) {
     const out = {};
-    for (const [k, v] of Object.entries(obj)) out[k] = SENSITIVE.test(k) ? MASK : String(v);
+    for (const [k, v] of Object.entries(obj)) out[k] = SENSITIVE.test(k) ? MASK : redactText(String(v));
     return out;
   }
 
@@ -277,8 +253,8 @@
   }
 
   function formatArg(arg) {
-    if (typeof arg === 'string') return arg;
-    if (arg instanceof Error) return arg.stack || `${arg.name}: ${arg.message}`;
+    if (typeof arg === 'string') return redactText(arg);
+    if (arg instanceof Error) return redactText(arg.stack || `${arg.name}: ${arg.message}`);
     if (arg instanceof Element) return `<${arg.tagName.toLowerCase()}${arg.id ? `#${arg.id}` : ''}>`;
     try {
       const seen = new WeakSet();
@@ -510,9 +486,9 @@
 
   function fieldValue(el) {
     const type = (el.getAttribute('type') || '').toLowerCase();
-    if (type === 'password' || SENSITIVE.test(el.name || '') || SENSITIVE.test(el.id || '')) return MASK;
+    if (['password', 'tel', 'email'].includes(type) || SENSITIVE.test(el.name || '') || SENSITIVE.test(el.id || '')) return MASK;
     if (el.tagName === 'SELECT') return [...el.selectedOptions].map((o) => o.text).join(', ');
-    return clip(String(el.value ?? ''), 200);
+    return clip(redactText(String(el.value ?? '')), 200);
   }
 
   addEventListener('click', (e) => {

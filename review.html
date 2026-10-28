@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>检查并导出 · Epic Recap</title>
+  <link rel="stylesheet" href="popup.css">
+  <link rel="stylesheet" href="review.css">
+</head>
+<body class="review-page">
+  <header class="review-header"><div class="brand"><img src="assets/07f59.png" width="24" height="24" alt=""><span>Epic Recap</span></div><span class="small muted">仅在本机处理，不会上传</span></header>
+  <main class="review-main">
+    <div class="review-title"><div><h1>检查后，再分享</h1><p id="period" class="muted">正在读取已保存的记录…</p></div><button id="return" class="btn secondary" type="button">返回记录</button></div>
+    <p id="error" class="message" role="alert" hidden></p>
+    <div id="content" hidden>
+      <div class="review-columns">
+        <section class="review-settings" aria-labelledby="description-title">
+          <h2 id="description-title">补充问题说明</h2>
+          <label for="note">发生了什么 <span class="muted">（可选）</span></label>
+          <textarea id="note" placeholder="例如：点击保存后一直转圈" maxlength="10000"></textarea>
+          <label for="expected">预期怎样 <span class="muted">（可选）</span></label>
+          <textarea id="expected" placeholder="例如：保存成功并返回列表" maxlength="10000"></textarea>
+          <h2>检查隐私</h2>
+          <p class="small muted">已自动隐藏部分密码、密钥、手机号和邮箱，但不能保证全部识别。请检查右侧报告和准备附带的画面。</p>
+          <label class="check-line"><input id="include-bodies" type="checkbox"><span>附带请求与响应正文<br><small class="muted">有助排查接口问题，也可能包含业务数据</small></span></label>
+          <label for="redactions">额外隐藏的文字 <span class="muted">（每行一项）</span></label>
+          <textarea id="redactions" placeholder="例如：客户名称、内部项目代号" maxlength="10000" aria-describedby="redactions-help"></textarea>
+          <p id="redactions-help" class="small muted">应用到报告、网络清单和文件名，不会自动遮挡图片或视频。</p>
+          <p id="save-status" class="small muted" role="status"></p>
+        </section>
+        <section class="report-section" aria-labelledby="report-title">
+          <div class="section-title"><h2 id="report-title">报告预览</h2><span id="file-count" class="small muted"></span></div>
+          <p class="small muted">此处是将要导出的文本；额外隐藏内容会同步应用。</p>
+          <pre id="report" tabindex="0" aria-label="报告预览内容"></pre>
+          <details><summary>查看导出文件清单</summary><ul id="file-list"></ul></details>
+        </section>
+      </div>
+      <section class="attachments" aria-labelledby="attachments-title">
+        <div class="section-title"><h2 id="attachments-title">选择要附带的画面</h2><span id="attachment-count" class="small muted"></span></div>
+        <p class="muted">截图与视频默认不附带。逐项检查后勾选；截图可遮挡，视频含页面声音，不能自动打码。</p>
+        <div id="media-list" class="media-grid"></div>
+      </section>
+      <section id="result" class="export-result" hidden aria-labelledby="result-title">
+        <h2 id="result-title">ZIP 已保存</h2><p id="result-path" class="folder"></p>
+        <div class="inline-actions"><button id="show-folder" class="btn secondary" type="button">打开文件夹</button><button id="copy-ai" class="btn secondary" type="button">复制给 AI 的说明</button></div>
+        <p class="small muted">发送 ZIP 或解压后的文件，并附上问题说明。不会自动发送给任何人。</p>
+      </section>
+      <footer class="review-footer">
+        <label class="check-line"><input id="reviewed" type="checkbox"><span>我已检查报告和所选附件，确认适合分享</span></label>
+        <div class="inline-actions"><button id="retry" class="btn secondary" type="button" hidden>重试上次导出</button><button id="export" class="btn primary" type="button" disabled>导出 ZIP</button></div>
+      </footer>
+    </div>
+    <p id="announcements" class="sr-only" role="status"></p>
+  </main>
+  <dialog id="image-editor" aria-labelledby="editor-title">
+    <div class="section-title"><h2 id="editor-title">遮挡敏感内容</h2><button id="close-editor" class="btn secondary" type="button">取消</button></div>
+    <p id="editor-help" class="small muted">在图片上拖动可添加不透明遮挡。也可用下方百分比输入选区；原图只保留在本机，不会随遮挡后的图片导出。</p>
+    <canvas id="editor-canvas" aria-label="截图遮挡画布" aria-describedby="editor-help" tabindex="0"></canvas>
+    <div class="rectangle-controls">
+      <label>左侧 %<input id="rect-x" type="number" min="0" max="99" value="0" required></label>
+      <label>顶部 %<input id="rect-y" type="number" min="0" max="99" value="0" required></label>
+      <label>宽度 %<input id="rect-w" type="number" min="1" max="100" value="25" required></label>
+      <label>高度 %<input id="rect-h" type="number" min="1" max="100" value="25" required></label>
+      <button id="mask-rectangle" class="btn secondary" type="button">遮挡选区</button>
+    </div>
+    <p id="editor-status" class="small muted" role="status"></p>
+    <div class="inline-actions"><button id="reset-image" class="btn secondary" type="button">还原原图</button><button id="save-image" class="btn primary" type="button">保存遮挡并加入导出</button></div>
+  </dialog>
+  <script type="module" src="review.js"></script>
+</body>
+</html>

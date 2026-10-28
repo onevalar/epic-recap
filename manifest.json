@@ -18,14 +18,14 @@
   },
   "commands": {
     "toggle-recording": {
-      "description": "开始记录；再按一次停止并导出",
+      "description": "开始记录；再按一次停止并检查导出",
       "suggested_key": { "default": "Alt+Shift+E" }
     }
   },
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["hook.js"],
+      "js": ["privacy.js", "hook.js"],
       "run_at": "document_start",
       "world": "MAIN",
       "all_frames": true

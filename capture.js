@@ -5,6 +5,8 @@
 // recording flag lives in chrome.storage.session. Continuous recordings are cut
 // into segments, which are kept per site in chrome.storage.local.
 
+import './privacy.js';
+
 export const MAX_MINUTES = 10;
 export const SEGMENT_MINUTES = 5;
 export const MAX_SEGMENTS = 10;
@@ -13,8 +15,7 @@ const MIN_SHOT_GAP = 1000; // Chrome allows about two captures per second
 const MAX_NET = 5000;
 const MAX_SWITCHES = 1000;
 const MAX_PERF = 200;
-const MASK = '******';
-const SENSITIVE = /authorization|cookie|token|secret|passw|pwd|api[-_]?key|session|credential|csrf|xsrf/i;
+const { MASK, SENSITIVE, redactText } = globalThis.__epicRecapPrivacy;
 
 const KEY = {
   rec: (tab) => `rec:${tab}`,
@@ -62,8 +63,34 @@ export async function recordingTabsList(mode) {
 }
 
 // The manual recording session (one at a time; it may span several tabs).
-export const getSession = async () => (await chrome.storage.session.get('session')).session || null;
-export const setSession = (session) => (session ? chrome.storage.session.set({ session }) : chrome.storage.session.remove('session'));
+export async function getSession() {
+  const current = (await chrome.storage.session.get('session')).session;
+  if (current) return current;
+  const { manualSession, manualArchive, exportTask } = await local.get(['manualSession', 'manualArchive', 'exportTask']);
+  let saved = manualSession;
+  // Recover stopped drafts made by earlier versions too.
+  if (!saved && manualArchive?.parts?.length) {
+    saved = { startedAt: Number(manualArchive.runId),
+      stoppedAt: Math.max(...manualArchive.parts.map(p => p.meta?.recording?.stoppedAt || p.endedAt || p.startedAt)),
+      tabs: Object.fromEntries(manualArchive.parts.map(p => [p.tabId, { title: p.meta.title, url: p.meta.url }])) };
+  }
+  if (!saved) return null;
+  const recovered = { ...saved, recovered: true,
+    stoppedAt: saved.stoppedAt || manualArchive?.savedAt || saved.startedAt,
+    stopReason: saved.stoppedAt ? saved.stopReason : 'restart',
+    lastExport: saved.lastExport || (exportTask?.runId === String(saved.startedAt) ? exportTask.result : undefined) };
+  await setSession(recovered);
+  return recovered;
+}
+export async function setSession(session) {
+  if (session) {
+    await local.set({ manualSession: session });
+    await chrome.storage.session.set({ session });
+  } else {
+    await local.remove('manualSession');
+    await chrome.storage.session.remove('session');
+  }
+}
 
 export function clearCollected(tabId) {
   return enqueue(async () => {
@@ -89,7 +116,7 @@ export async function clearAllTabData() {
 const lastShot = new Map();
 
 export function handleShotRequest(tab, req) {
-  enqueue(() => takeShot(tab.id, req));
+  return enqueue(() => takeShot(tab.id, req));
 }
 
 async function takeShot(tabId, { id, problem }) {
@@ -142,17 +169,13 @@ chrome.storage.onChanged.addListener((changes, area) => {
 });
 
 function redactUrl(u) {
-  try {
-    const url = new URL(u);
-    for (const k of [...url.searchParams.keys()]) if (SENSITIVE.test(k)) url.searchParams.set(k, MASK);
-    const s = url.href;
-    return s.length > 400 ? `${s.slice(0, 400)}…` : s;
-  } catch { return u; }
+  const s = globalThis.__epicRecapPrivacy.redactUrl(u);
+  return s.length > 400 ? `${s.slice(0, 400)}…` : s;
 }
 
 function headerObject(list) {
   const out = {};
-  for (const { name, value } of list || []) out[name] = SENSITIVE.test(name) ? MASK : value;
+  for (const { name, value } of list || []) out[name] = SENSITIVE.test(name) ? MASK : redactText(value);
   return out;
 }
 
@@ -249,11 +272,11 @@ export function handleTick(tab, { heapUsed, heapLimit, device }) {
 // ---------- events handed over by unloading pages ----------
 
 export function handleHandover(tab, frameId, { events, isTop, url, title }) {
-  enqueue(async () => {
+  return enqueue(async () => {
     // Accept them while the tab records, or (stopped, not yet exported) while it belongs to the session.
     const rec = await getRecording(tab.id);
     const session = await getSession();
-    const startedAt = rec?.startedAt ?? (session?.tabs[tab.id] ? session.startedAt : null);
+    const startedAt = rec?.startedAt ?? (!session?.recovered && session?.tabs[tab.id] ? session.startedAt : null);
     if (startedAt == null) return;
     const saved = await getOne(KEY.handover(tab.id), { events: [], page: null });
     const known = new Set(saved.events.map((e) => e.id));
@@ -308,8 +331,9 @@ export const listSegments = (origin) => getOne(KEY.segments(origin), []);
 export function saveSegment(origin, segment) {
   return enqueue(async () => {
     const { shots, ...data } = segment;
-    const index = await getOne(KEY.segments(origin), []);
+    const index = (await getOne(KEY.segments(origin), [])).filter(s => s.id !== segment.id);
     index.push({ id: segment.id, tabId: segment.tabId, startedAt: segment.startedAt, endedAt: segment.endedAt, title: segment.meta?.title, counts: segment.counts });
+    index.sort((a, b) => a.startedAt - b.startedAt);
     const removed = index.splice(0, Math.max(0, index.length - MAX_SEGMENTS));
     await local.set({
       [KEY.segments(origin)]: index,

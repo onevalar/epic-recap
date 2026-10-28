@@ -2,6 +2,8 @@ import {
   authorizeVideo, closeSession, disableContinuous, discardTab, enableContinuous, exportRange, exportSession, getState,
   helloFromFrame, isRecordingTab, joinSession, leaveSession, memberClosed, originOf, rotateSegment,
   showRecordingBadge, startSession, stopSession, startContinuousGroup, stopContinuousGroup, closeContinuous, withLifecycle,
+  checkpointRecordings, continuousCoverage, fillContinuousSlots, getContinuousRun, markProblem,
+  prepareReview, getReview, updateReview, previewReview, exportReviewed,
 } from './export.js';
 import {
   clearAllTabData, getContinuousSites, getSession, handleHandover, handleShotRequest, handleTick,
@@ -16,11 +18,11 @@ chrome.webRequest.onCompleted.addListener(onCompleted, ALL_URLS, ['responseHeade
 chrome.webRequest.onErrorOccurred.addListener(onErrorOccurred, ALL_URLS);
 
 async function runCommand(message) {
-  if (['state', 'export', 'export-range'].includes(message.name)) return dispatchCommand(message);
+  if (['state', 'export', 'export-range', 'export-reviewed', 'get-review', 'preview-review', 'coverage'].includes(message.name)) return dispatchCommand(message);
   return withLifecycle(() => dispatchCommand(message));
 }
 async function dispatchCommand({ name, tabId, options = {} }) {
-  const tab = () => chrome.tabs.get(tabId);
+  const tab = () => chrome.tabs.get(tabId).catch(() => ({ id: tabId, title: '原页面已关闭', url: '' }));
   switch (name) {
     case 'state': return getState(tabId, options);
     case 'start': return startSession(options.tabIds || [tabId], { video: Boolean(options.video) }, tabId);
@@ -30,10 +32,17 @@ async function dispatchCommand({ name, tabId, options = {} }) {
     case 'close': return closeSession(options);
     case 'export': return exportSession(await tab(), options.note, options);
     case 'video-authorize': return authorizeVideo(tabId);
-    case 'continuous-on': return startContinuousGroup(options.origins || [originOf((await tab()).url)]);
+    case 'continuous-on': return startContinuousGroup(options.origins || [originOf((await tab()).url)], tabId);
     case 'continuous-off': return stopContinuousGroup();
     case 'continuous-close': return closeContinuous(options);
     case 'export-range': return exportRange(await tab(), options);
+    case 'coverage': return continuousCoverage(options.origins || [], tabId);
+    case 'mark': return markProblem(tabId, options.note);
+    case 'prepare-review': return prepareReview(await tab(), options);
+    case 'get-review': return getReview(options.id);
+    case 'save-review': return updateReview(options.id, options.changes);
+    case 'preview-review': return previewReview(options.id);
+    case 'export-reviewed': return exportReviewed(await tab(), options);
     default: throw new Error(`未知指令 ${name}`);
   }
 }
@@ -41,9 +50,9 @@ async function dispatchCommand({ name, tabId, options = {} }) {
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg?.target === 'offscreen') return false;
   switch (msg?.type) {
-    case 'shot': if (sender.tab) handleShotRequest(sender.tab, msg); return false;
+    case 'shot': if (sender.tab) handleShotRequest(sender.tab, msg).catch(() => {}); return false;
     case 'tick': if (sender.tab) handleTick(sender.tab, msg); return false;
-    case 'flush': if (sender.tab) handleHandover(sender.tab, sender.frameId, msg); return false;
+    case 'flush': if (sender.tab) handleHandover(sender.tab, sender.frameId, msg).catch(() => {}); return false;
     case 'hello':
       withLifecycle(() => helloFromFrame(sender)).then(sendResponse, () => sendResponse(null));
       return true;
@@ -64,29 +73,31 @@ function flashBadge(tabId, ok, title) {
   }, 3000);
 }
 
-// Shortcut. Continuous sites: export the last 10 minutes. Otherwise the first
-// press starts a session on the tabs ticked last time, the second stops and exports.
+// The shortcut never skips the privacy review before sharing a report.
 async function toggleActiveTab() {
   const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
   if (!tab) return;
   try {
     const origin = originOf(tab.url);
     if (origin && (await getContinuousSites())[origin]) {
-      await exportRange(tab, { minutes: 10 });
+      await withLifecycle(() => prepareReview(tab, { mode: 'continuous', minutes: 10 }));
       flashBadge(tab.id, true, 'Epic Recap');
       return;
     }
     const session = await getSession();
     if (session && !session.stoppedAt) {
       await withLifecycle(() => stopSession());
-      await exportSession(tab);
+      await withLifecycle(() => prepareReview(tab, { mode: 'manual' }));
       flashBadge(tab.id, true, 'Epic Recap');
       return;
     }
-    if (session?.stoppedAt) await withLifecycle(() => closeSession());
+    if (session?.stoppedAt) {
+      await withLifecycle(() => prepareReview(tab, { mode: 'manual' }));
+      return;
+    }
     const tabIds = [tab.id];
     const { prefVideo } = await chrome.storage.local.get('prefVideo');
-    await withLifecycle(() => startSession(tabIds, { video: prefVideo !== false }, tab.id));
+    await withLifecycle(() => startSession(tabIds, { video: prefVideo === true }, tab.id));
   } catch (err) {
     flashBadge(tab.id, false, `操作失败：${err.message}`);
   }
@@ -97,6 +108,10 @@ chrome.commands.onCommand.addListener((command) => {
 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === 'checkpoint:recording') {
+    withLifecycle(async () => { await fillContinuousSlots(); await checkpointRecordings(); }).catch(() => {});
+    return;
+  }
   // Manual: the pages stop themselves at the 10-minute mark; this ends the session and its videos.
   if (alarm.name === 'stop:session') { withLifecycle(() => stopSession('auto')).catch(() => {}); return; }
   // Continuous: close the tab's 5-minute segment and start the next.
@@ -112,11 +127,12 @@ chrome.tabs.onActivated.addListener(async ({ tabId }) => {
 });
 
 chrome.tabs.onUpdated.addListener(async (tabId, info) => {
+  if (info.status === 'complete') await withLifecycle(() => fillContinuousSlots(tabId)).catch(() => {});
   const rec = await isRecordingTab(tabId);
   if (!rec) return;
   // A continuously recorded tab left the site: save what it has and stop.
   if (info.url && rec.mode === 'continuous' && originOf(info.url) !== rec.origin) {
-    await withLifecycle(() => rotateSegment(tabId, { restart: false }));
+    await withLifecycle(async () => { await rotateSegment(tabId, { restart: false }); await fillContinuousSlots(); });
     return;
   }
   // Keep the REC badge on while the recording tab reloads or navigates.
@@ -126,7 +142,7 @@ chrome.tabs.onUpdated.addListener(async (tabId, info) => {
 chrome.tabs.onRemoved.addListener(async (tabId) => {
   const rec = await isRecordingTab(tabId);
   if (rec?.mode === 'continuous') {
-    await withLifecycle(() => rotateSegment(tabId, { restart: false })).catch(() => {});
+    await withLifecycle(async () => { await rotateSegment(tabId, { restart: false }); await fillContinuousSlots(); await checkpointRecordings(); }).catch(() => {});
     await discardTab(tabId).catch(() => {});
     return;
   }
@@ -134,7 +150,9 @@ chrome.tabs.onRemoved.addListener(async (tabId) => {
   await discardTab(tabId).catch(() => {});
 });
 
-chrome.runtime.onStartup.addListener(() => { clearAllTabData().catch(() => {}); });
+chrome.runtime.onStartup.addListener(() => {
+  withLifecycle(async () => { await getSession(); await getContinuousRun(); await clearAllTabData(); }).catch(() => {});
+});
 
 // Lets automated tests drive the extension without opening the popup.
 globalThis.epicTS = { runCommand, toggleActiveTab, rotateSegment };

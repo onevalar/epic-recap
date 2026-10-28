@@ -5,6 +5,10 @@
   "type": "module",
   "scripts": {
     "test": "node --test tests/lifecycle.test.js",
-    "test:browser": "node tests/browser.mjs"
+    "test:browser": "node tests/browser.mjs",
+    "vendor": "node scripts/vendor.mjs"
+  },
+  "dependencies": {
+    "fflate": "0.8.3"
   }
 }

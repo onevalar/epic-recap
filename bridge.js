@@ -9,10 +9,6 @@ document.addEventListener('__epicTS:signal', (e) => {
 
 (async () => {
   try {
-    const ancestors = location.ancestorOrigins;
-    const topOrigin = window === top ? location.origin : ancestors?.[ancestors.length - 1];
-    const { continuousSites = {} } = await chrome.storage.local.get('continuousSites');
-    if (!continuousSites[topOrigin]) return;
     const rec = await chrome.runtime.sendMessage({ type: 'hello' });
     if (rec) document.dispatchEvent(new CustomEvent('__epicTS:control', { detail: JSON.stringify(rec) }));
   } catch {}
