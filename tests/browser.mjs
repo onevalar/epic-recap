@@ -1,0 +1,101 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import http from 'node:http';
+import { createRequire } from 'node:module';
+const require=createRequire(import.meta.url);
+const {chromium}=require(process.env.PLAYWRIGHT_MODULE || '/Users/anvalar/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright');
+const appDir=path.resolve(import.meta.dirname,'..');
+const temp=await fs.mkdtemp(path.join(os.tmpdir(),'recap-browser-'));
+const downloadDir=path.join(temp,'downloads');await fs.mkdir(downloadDir);
+await fs.mkdir(path.join(temp,'profile','Default'),{recursive:true});
+await fs.writeFile(path.join(temp,'profile','Default','Preferences'),JSON.stringify({download:{default_directory:downloadDir,prompt_for_download:false}}));
+const html=title=>`<!doctype html><meta charset="utf-8"><title>${title}</title><h1>${title}</h1><button id="action">提交订单</button><script>document.querySelector('button').onclick=()=>{console.error('订单失败');fetch('/fail').then(r=>r.json())};</script>`;
+const servers=[];
+async function serve(title){const s=http.createServer((req,res)=>{if(req.url==='/fail'){res.writeHead(500,{'Content-Type':'application/json'});res.end('{"error":"test failure"}');}else{res.writeHead(200,{'Content-Type':'text/html; charset=utf-8'});res.end(html(title));}});await new Promise(r=>s.listen(0,'127.0.0.1',r));servers.push(s);return `http://127.0.0.1:${s.address().port}`;}
+const [originA,originB]=await Promise.all([serve('订单管理'),serve('管理后台')]);
+const browserPath=process.env.CHROMIUM_PATH || '/Users/anvalar/Library/Caches/ms-playwright/chromium-1217/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing';
+let context;
+const checks=[];
+const passed=name=>{checks.push(name);console.log('PASS',name);};
+try{
+ context=await chromium.launchPersistentContext(path.join(temp,'profile'),{headless:true,executablePath:browserPath,
+   args:[`--disable-extensions-except=${appDir}`,`--load-extension=${appDir}`],ignoreDefaultArgs:['--disable-extensions'],acceptDownloads:true,downloadsPath:downloadDir});
+ const worker=context.serviceWorkers()[0] || await context.waitForEvent('serviceworker');
+ const extensionId=new URL(worker.url()).host;
+ const a=await context.newPage();await a.goto(originA);
+ const b=await context.newPage();await b.goto(originB);
+ const api=async(name,tabId,options={})=>worker.evaluate(({name,tabId,options})=>globalThis.epicTS.runCommand({name,tabId,options}),{name,tabId,options});
+ const tabs=await worker.evaluate(()=>chrome.tabs.query({}));
+ const aid=tabs.find(t=>t.url.startsWith(originA)).id,bid=tabs.find(t=>t.url.startsWith(originB)).id;
+ const popup=await context.newPage();await popup.setViewportSize({width:360,height:600});
+ const errors=[];popup.on('pageerror',e=>errors.push(e.message));
+ const open=async(id=aid)=>{await popup.goto(`chrome-extension://${extensionId}/popup.html?tab=${id}`);await popup.locator('#app:not([data-view="loading"])').waitFor();await popup.evaluate(()=>document.fonts.ready);};
+ const waitView=async(v)=>popup.waitForFunction(v=>document.querySelector('#app')?.dataset.view===v,v,{timeout:15000});
+ const click=async(label)=>popup.getByRole('button',{name:label,exact:true}).click();
+ const screenshot=async(name)=>{const h=await popup.locator('#app').evaluate(n=>n.getBoundingClientRect().height);await popup.screenshot({path:path.join(temp,`${name}.png`),clip:{x:0,y:0,width:360,height:Math.min(h,600)}});};
+ await open();await waitView('home');assert.equal(await popup.locator('#video').isChecked(),true);
+ assert.match(await popup.locator('body').evaluate(n=>getComputedStyle(n).fontFamily),/Alibaba/);await screenshot('home');passed('home defaults and embedded Alibaba font');
+ await popup.locator('#video').uncheck();await click('同时记录多个页面');await waitView('multi');
+ await popup.locator(`label[title="${originB}/"] input`).check();
+ assert.equal(await popup.locator('#multi-video').isChecked(),false);
+ await popup.locator('#search').fill('管理后台');assert.equal(await popup.locator('.candidate').count(),1);await popup.locator('#search').fill('');
+ await screenshot('multi');await click('选择页面');await waitView('home');
+ assert.equal((await api('state',aid)).session,null);passed('configuration does not start recording and video preference is shared');
+ await click('开始记录');await waitView('recording');await a.click('#action');await popup.waitForFunction(()=>Number(document.querySelector('.metric strong')?.textContent)>0);
+ await screenshot('recording');await open();await waitView('recording');assert.equal((await api('state',aid)).session.active,true);passed('manual recording captures real errors and survives popup reopen');
+ await open(bid);await waitView('other');await screenshot('outside');await click('把此页面加入记录');await waitView('recording');assert.equal((await api('state',bid)).session.members.length,2);
+ await click('停止记录');await waitView('stopped');assert.equal((await api('state',bid)).session.active,false);await screenshot('stopped');
+ await click('添加备注并导出');await popup.locator('#note').fill('订单提交失败，预期跳转到结果页面。');await open(bid);await click('添加备注并导出');assert.equal(await popup.locator('#note').inputValue(),'订单提交失败，预期跳转到结果页面。');
+ await click('导出');await waitView('success');const manual=(await api('state',bid)).exportTask.result;assert.equal(manual.pageCount,2);assert.equal(manual.videoCount,0);
+ const saved=await worker.evaluate(()=>chrome.downloads.search({}));const report=saved.find(x=>x.id===manual.reportId);assert.ok(report.filename.startsWith(downloadDir),`unsafe test download path ${report.filename}`);
+ assert.match(await fs.readFile(report.filename,'utf8'),/订单提交失败/);await screenshot('success');passed('join, stop, persistent notes and real filesystem export');
+ await click('开始新的记录');await waitView('home');assert.equal((await api('state',bid)).session,null);
+ await popup.locator('#continuous').check();assert.equal(await popup.locator('#video').isDisabled(),true);assert.equal((await api('state',bid)).continuous,null);
+ await click('选择多个站点');await waitView('multi');await popup.locator(`label[title="${originA}"] input`).check();await click('开始记录 · 2 个站点');await waitView('continuous');
+ let cs=(await api('state',bid)).continuous;assert.equal(cs.origins.length,2);assert.equal(cs.recording.length,2);await a.click('#action');await b.click('#action');
+ await screenshot('continuous');await click('导出片段');await waitView('range');await click('直接导出');await waitView('success');assert.equal((await api('state',bid)).continuous.active,true);
+ await click('返回记录');await waitView('continuous');await a.click('#action');await click('停止持续记录');await waitView('stopped');cs=(await api('state',bid)).continuous;assert.equal(cs.active,false);assert.ok(cs.segments>=2);assert.ok(cs.totals.errors>=2);await screenshot('continuous-stopped');passed('multiple sites, export without stopping, and final segment retained after stop');
+ await click('直接导出');await waitView('success');await click('开始新的记录');await waitView('home');assert.equal((await api('state',bid)).continuous,null);
+ // Exercise a real export operation with a deliberate download transport failure.
+ await click('开始记录');await waitView('recording');await b.click('#action');await click('停止记录');await waitView('stopped');
+ await worker.evaluate(()=>{globalThis.originalDownload=chrome.downloads.download;chrome.downloads.download=async()=>{throw new Error('测试下载失败');};});
+ await click('直接导出');await waitView('exportError');const failed=(await api('state',bid)).exportTask;assert.equal(failed.status,'failed');
+ const snapshotBefore=await worker.evaluate(()=>chrome.storage.local.get('exportSnapshot'));
+ await worker.evaluate(()=>{chrome.downloads.download=globalThis.originalDownload;delete globalThis.originalDownload;});
+ await click('重试导出');await waitView('success');const retried=(await api('state',bid)).exportTask;assert.equal(retried.id,failed.id);assert.equal(retried.result.folder,snapshotBefore.exportSnapshot.folder);passed('failed download never claims success; retry uses the same snapshot and directory');
+ await click('开始新的记录');await waitView('home');await click('开始记录');await waitView('recording');await click('停止记录');await waitView('stopped');
+ await click('放弃这次记录');await waitView('discard');await click('返回');await waitView('stopped');assert.ok((await api('state',bid)).session);
+ await click('放弃这次记录');await click('放弃并开始新的记录');await waitView('home');assert.equal((await api('state',bid)).session,null);passed('discard cancellation preserves data and explicit confirmation clears it');
+ const more=[];for(let i=0;i<3;i++){const p=await context.newPage();await p.goto(`${originA}/extra-${i}`);more.push(p);}
+ await open(bid);await waitView('home');await click('同时记录多个页面');await waitView('multi');
+ const available=popup.locator('.candidate input:not(:disabled)');
+ for(let i=0;i<3;i++)await available.nth(i+1).check();
+ assert.equal(await popup.locator('.candidate input:checked').count(),4);
+ assert.ok(await popup.locator('.candidate input:not(:checked):disabled').count()>=1);
+ await click('开始记录 · 4 个页面');await waitView('recording');assert.equal((await api('state',bid)).session.members.length,4);
+ const allTabs=await worker.evaluate(()=>chrome.tabs.query({}));
+ const memberIds=(await api('state',bid)).session.members.map(m=>m.tabId);
+ const fifth=allTabs.find(t=>t.url.startsWith(originA)&&!memberIds.includes(t.id));assert.ok(fifth);
+ await open(fifth.id);await waitView('other');assert.equal(await popup.getByRole('button',{name:'把此页面加入记录',exact:true}).isDisabled(),true);
+ await assert.rejects(api('join',fifth.id),/最多同时记录 4/);
+ await click('查看正在记录的页面');await waitView('recording');await api('stop',fifth.id);await waitView('stopped');
+ await click('放弃这次记录');await click('放弃并开始新的记录');await waitView('home');
+ // Simulate a page whose collector is unavailable (for example, opened before install).
+ const unreadyId=allTabs.find(t=>t.url===`${originA}/extra-0`).id;
+ await worker.evaluate(id=>{globalThis.originalExecuteScript=chrome.scripting.executeScript;chrome.scripting.executeScript=options=>options.target.tabId===id?Promise.resolve([{frameId:0,result:null}]):globalThis.originalExecuteScript(options);},unreadyId);
+ const readiness=await api('state',aid,{candidates:true});const needsRefresh=readiness.candidates.find(c=>c.url===`${originA}/extra-0`);
+ assert.equal(needsRefresh.available,false);assert.match(needsRefresh.reason,/刷新/);
+ await open(aid);await waitView('home');await click('同时记录多个页面');await waitView('multi');
+ assert.equal(await popup.locator(`label[title="${originA}/extra-0"] input`).isDisabled(),true);
+ await worker.evaluate(()=>{chrome.scripting.executeScript=globalThis.originalExecuteScript;delete globalThis.originalExecuteScript;});
+ passed('four-page limit enforced by UI and backend; unready pages require refresh');
+ // Candidate preflight: a page with scripts disabled for collection is presented as unavailable.
+ const raw=await api('state',aid,{candidates:true});assert.ok(raw.candidates.some(c=>!c.origin&&!c.available));
+ assert.equal(errors.length,0,errors.join('\n'));
+ const brokenAssets=await popup.locator('img').evaluateAll(async imgs=>{await Promise.all(imgs.map(i=>i.decode().catch(()=>{})));return imgs.filter(i=>!i.complete||!i.naturalWidth).map(i=>i.src);});assert.deepEqual(brokenAssets,[]);passed('no popup runtime errors or broken image assets');
+ await fs.writeFile(path.join(temp,'result.json'),JSON.stringify({checks,extensionId,downloadDir,errors},null,2));
+ console.log('ARTIFACTS',temp);
+}catch(e){console.error(e);if(context){for(const page of context.pages())if(page.url().includes('popup.html'))await page.screenshot({path:path.join(temp,'failure.png'),fullPage:true}).catch(()=>{});}console.log('ARTIFACTS',temp);process.exitCode=1;}
+finally{await context?.close();for(const s of servers)await new Promise(r=>s.close(r));}
