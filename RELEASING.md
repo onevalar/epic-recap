@@ -6,7 +6,6 @@
 
 2026-10-29 已连接 Google Cloud 项目 `able-math-457002-g0`、专用服务账号和 Chrome 商店发布者 anyujia。GitHub 的 `chrome-web-store` 环境仅允许 main，使用短期身份，不保存私钥。
 
-- [准备发版演练通过](https://github.com/onevalar/epic-recap/actions/runs/40812530415)：版本计算、单元测试、实际浏览器测试、ZIP 和三张截图预览均已跑通，没有创建新版本或提交商店。
 - [只读身份与 API 连接检查通过](https://github.com/onevalar/epic-recap/actions/runs/40813642902)。当前 API 没有返回 revision 状态，而商店后台显示 0.3.0 正在审核。不能把缺失字段理解成“没有待审核版本”。
 - 自动发布遇到状态缺失时会停止。实际上传/提交尚未执行；首次审核结束后，先重新运行“查询审核状态（只读）”，确认 API 返回版本状态，再发布后续版本。
 
@@ -14,14 +13,15 @@
 
 ## 准备发版
 
-选择“准备发版” → Run workflow。
+先将代码推送到 main。选择“准备发版” → 点击右上角 Run workflow 展开表单 → 填写后点击表单底部 Run workflow。
 
 - 版本填写 `patch`（如 0.3.0 → 0.3.1）、`minor`（→ 0.4.0）、`major`，也可以填写完整三段版本号。
 - 更新说明可填写；留空会从上次已提交版本之后的 Git 提交标题生成草稿，**没有使用 AI 自动推断功能**。
 - 默认只准备，不提交商店。确认没有界面、权限和隐私变化的普通更新，可以勾选“检查通过后直接提交商店审核”。
-- “仅演练”只生成下载包和预览，不推送版本、不创建 GitHub Release，也不访问商店 API。
 
 流程会同步 manifest/package/package-lock 的版本，运行单元测试和实际 Chromium 扩展测试，检查导出、恢复与视频，生成 ZIP 和三张 1280×800 JPEG 候选图。全部通过后，才提交版本号到 main、创建 vX.Y.Z 标签及 GitHub 发布草稿。若 main 同时有新提交，会停止，需重新准备。
+
+每次运行都会准备正式版本。未勾选直接提交时，版本、标签和 GitHub 草稿照常生成，商店提交留到“确认发布”。
 
 在运行详情的 Artifacts 下载预览，或在 Releases 查看草稿的说明、ZIP、截图和校验信息。测试页面仅使用合成演示数据。
 
@@ -57,5 +57,15 @@
 8. 先运行只读连接检查，再启用正式发布。不要用正在审核的 0.3.0 测试上传。
 
 需要 Google 项目管理权限和一次明确的发布授权。不要把 OAuth token、服务账号 JSON 私钥或账号密码提交到仓库。
+
+## 复用到其他 Chrome 插件
+
+运行 `npm run release:template`，得到 `dist/chrome-extension-release-template.zip`。通用工作流从新项目的 package.json 和 manifest.json 读取包名及展示名称，不再固定为 Epic Recap。
+
+模板包含三条工作流、版本/校验/上传脚本、初始化命令和接入说明；不包含本项目的商店 ID、Google 身份、界面或截图。解压到新插件前先比较同名文件。详细约定见 [模板接入说明](scripts/release/template-guide.md)。
+
+新项目只需要接入自身的测试、构建和截图命令，填写自己的商店扩展 ID，并为仓库配置一次 Google 身份绑定。同一商店发布者可以沿用现有服务账号，但新仓库仍需单独授权；不能直接复制 Epic Recap 的 Google 匹配条件，也不要覆盖旧仓库的绑定。
+
+之后可直接让助手“按 Epic Recap 模板接入这个插件”，提供项目路径、GitHub 仓库和商店扩展 ID。接入完成后的日常操作与这里相同。
 
 官方参考：[服务账号](https://developer.chrome.com/docs/webstore/service-accounts)、[发布 API](https://developer.chrome.com/docs/webstore/api/reference/rest/v2/publishers.items/publish)、[GitHub OIDC](https://github.com/google-github-actions/auth)、[GitHub 新版身份标识](https://docs.github.com/en/actions/reference/security/oidc#immutable-subject-claims)。

@@ -28,6 +28,11 @@ export function reviewFlags(before, after, files) {
   }
   if (files.some(f => /^(popup|review)\.(js|html|css)$|^store\/(listing|screenshots|screenshot-copy)/.test(f))) flags.push('界面或商店素材已变化，请核对介绍和三张截图');
   if (files.some(f => /^(privacy|capture|hook|bridge|sw|export|video|offscreen)\.js$|^docs\/|^store\/privacy/.test(f))) flags.push('数据处理代码或隐私政策已变化，请核对隐私声明');
+  // Other extensions may keep their implementation under src/, public/, etc.
+  const productFiles=files.filter(f => !/^(scripts|tests|vendor|\.github|\.release)\//.test(f));
+  if (!flags.length && productFiles.some(f => /\.(js|mjs|cjs|ts|tsx|jsx|vue|svelte|html|css|scss|wasm|png|jpe?g|svg|webp|woff2?)$/.test(f) || /^(src|public|extension|icons|assets|_locales)\//.test(f))) {
+    flags.push('插件代码或素材已变化，请核对界面、权限及隐私声明');
+  }
   return flags;
 }
 export function verifyBundle(bytes, metadata) {

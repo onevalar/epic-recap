@@ -1,5 +1,5 @@
 name: 准备发版
-run-name: 准备 ${{ inputs.version }}${{ inputs.dry_run && '（演练）' || '' }}
+run-name: 准备 ${{ inputs.version }}
 on:
   workflow_dispatch:
     inputs:
@@ -13,10 +13,6 @@ on:
         type: string
       submit:
         description: '检查通过后直接提交商店审核（涉及界面或隐私变化时停止）'
-        default: false
-        type: boolean
-      dry_run:
-        description: '仅演练：生成预览，不改仓库版本、不创建标签、不上传商店'
         default: false
         type: boolean
 permissions:
@@ -78,9 +74,10 @@ jobs:
             dist/browser/
           retention-days: 30
       - name: 保存版本并创建 GitHub 发布草稿
-        if: ${{ !inputs.dry_run }}
         env:
           VERSION: ${{ steps.prepare.outputs.version }}
+          SLUG: ${{ steps.prepare.outputs.slug }}
+          TITLE: ${{ steps.prepare.outputs.title }}
           GH_TOKEN: ${{ github.token }}
         run: |
           git config user.name 'github-actions[bot]'
@@ -92,11 +89,11 @@ jobs:
           git tag "v$VERSION"
           git push --atomic origin HEAD:main "refs/tags/v$VERSION"
           (cd dist/release && zip -qr screenshots.zip screenshots)
-          gh release create "v$VERSION" --verify-tag --draft --title "Epic Recap $VERSION · 待提交商店" --notes-file dist/release/NOTES.md "dist/release/epic-recap-$VERSION-chrome-web-store.zip" dist/release/release.json dist/release/screenshots.zip
+          gh release create "v$VERSION" --verify-tag --draft --title "$TITLE $VERSION · 待提交商店" --notes-file dist/release/NOTES.md "dist/release/$SLUG-$VERSION-chrome-web-store.zip" dist/release/release.json dist/release/screenshots.zip
           echo "预览已保存：https://github.com/$GITHUB_REPOSITORY/releases" >> "$GITHUB_STEP_SUMMARY"
   publish:
     needs: prepare
-    if: ${{ inputs.submit && !inputs.dry_run && needs.prepare.outputs.review_required == 'false' }}
+    if: ${{ inputs.submit && needs.prepare.outputs.review_required == 'false' }}
     permissions:
       contents: write
       id-token: write

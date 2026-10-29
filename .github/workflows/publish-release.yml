@@ -57,15 +57,17 @@ jobs:
           node --input-type=module -e "import {versionParts} from './scripts/release/lib.mjs'; versionParts(process.env.VERSION)"
           git merge-base --is-ancestor "v$VERSION" origin/main
           mkdir -p dist/release
-          gh release download "v$VERSION" --dir dist/release --pattern "epic-recap-$VERSION-chrome-web-store.zip" --pattern release.json
+          SLUG=$(node --input-type=module -e "import {projectInfo} from './scripts/release/project.mjs'; console.log(projectInfo().slug)")
+          gh release download "v$VERSION" --dir dist/release --pattern "$SLUG-$VERSION-chrome-web-store.zip" --pattern release.json
           node --input-type=module <<'JS'
           import {readFileSync} from 'node:fs';
           import {execFileSync} from 'node:child_process';
           import assert from 'node:assert/strict';
           import {verifyBundle} from './scripts/release/lib.mjs';
+          import {archiveName} from './scripts/release/project.mjs';
           const m=JSON.parse(readFileSync('dist/release/release.json'));
           assert.equal(m.version,process.env.VERSION);
-          assert.equal(m.file,`epic-recap-${m.version}-chrome-web-store.zip`);
+          assert.equal(m.file,archiveName(m.version));
           const manifest=verifyBundle(readFileSync(`dist/release/${m.file}`),m);
           assert.deepEqual(manifest,JSON.parse(execFileSync('git',['show',`v${m.version}:manifest.json`],{encoding:'utf8'})));
           assert.equal(m.sourceCommit,execFileSync('git',['rev-parse',`v${m.version}^`],{encoding:'utf8'}).trim());
@@ -100,7 +102,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release upload "v$VERSION" dist/release/submission-result.json --clobber
-          gh release edit "v$VERSION" --draft=false --title "Epic Recap $VERSION · 已提交 Chrome 商店"
+          TITLE=$(node --input-type=module -e "import {projectInfo} from './scripts/release/project.mjs'; console.log(projectInfo().title)")
+          gh release edit "v$VERSION" --draft=false --title "$TITLE $VERSION · 已提交 Chrome 商店"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile, writeFile, appendFile } from 'node:fs/promises';
 import { versionParts, verifyBundle, submissionDecision } from './lib.mjs';
+import { archiveName } from './project.mjs';
 
 export async function publish({token, config, meta, bytes, confirmed=false, mode='DEFAULT_PUBLISH', fetcher=fetch, sleep=ms=>new Promise(r=>setTimeout(r,ms))}) {
   versionParts(meta.version); verifyBundle(bytes,meta);
@@ -34,7 +35,7 @@ if (process.argv[1]?.endsWith('/publish.mjs')) {
   const meta = JSON.parse(await readFile('dist/release/release.json','utf8'));
   const expected = process.env.RELEASE_VERSION;
   assert.equal(meta.version,expected,'所选版本与下载的发布包不一致');
-  assert.equal(meta.file,`epic-recap-${expected}-chrome-web-store.zip`);
+  assert.equal(meta.file,archiveName(expected));
   const result = await publish({token:process.env.CWS_ACCESS_TOKEN,config:JSON.parse(await readFile('.release/store.json','utf8')),meta,bytes:await readFile(`dist/release/${meta.file}`),confirmed:process.env.METADATA_CONFIRMED==='true',mode:process.env.PUBLISH_MODE || 'DEFAULT_PUBLISH'});
   await writeFile('dist/release/submission-result.json',JSON.stringify(result,null,2)+'\n');
   if (process.env.GITHUB_STEP_SUMMARY) await appendFile(process.env.GITHUB_STEP_SUMMARY,`\nChrome Web Store ${meta.version}：${result.result}\n\n提交审核不代表已上架，请查看商店状态。\n`);

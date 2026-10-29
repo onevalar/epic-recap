@@ -20,6 +20,9 @@ test('version increments and rejects malformed, equal, older or overflowing inpu
 test('permission, UI and privacy changes need human checking',()=>{
   assert.equal(reviewFlags({permissions:['tabs']},{permissions:['tabs']},['tests/a.js']).length,0);
   assert.equal(reviewFlags({permissions:['tabs']},{permissions:['tabs','history']},['popup.js','privacy.js']).length,3);
+  assert.equal(reviewFlags({}, {}, ['src/popup/App.tsx']).length,1);
+  assert.equal(reviewFlags({}, {}, ['public/settings.json']).length,1);
+  assert.equal(reviewFlags({}, {}, ['scripts/release/project.mjs']).length,0);
 });
 test('checksum and ZIP manifest bind the prepared version',()=>{
   verifyBundle(bytes,meta);

@@ -8,9 +8,10 @@
     "test": "node --test tests/lifecycle.test.js",
     "test:browser": "node tests/browser.mjs",
     "vendor": "node scripts/vendor.mjs",
-    "test:release": "node --test tests/release.test.mjs",
+    "test:release": "node --test tests/release.test.mjs tests/release-template.test.mjs",
     "release:prepare": "node scripts/release/prepare.mjs",
-    "release:screenshots": "node scripts/release/screenshots.mjs"
+    "release:screenshots": "node scripts/release/screenshots.mjs",
+    "release:template": "node scripts/release/export-template.mjs"
   },
   "dependencies": {
     "fflate": "0.8.3"
