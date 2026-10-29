@@ -15,13 +15,13 @@ fi
 if ! gcloud iam workload-identity-pools describe "$release_pool" --location=global --project="$release_project" >/dev/null 2>&1; then
   gcloud iam workload-identity-pools create "$release_pool" --location=global --display-name='Epic Recap GitHub' --project="$release_project"
 fi
-release_condition="assertion.repository_id == '1437784855' && assertion.repository_owner_id == '217557060' && assertion.ref == 'refs/heads/main' && assertion.sub == 'repo:onevalar/epic-recap:environment:chrome-web-store'"
+release_condition="assertion.repository_id == '1437784855' && assertion.repository_owner_id == '217557060' && assertion.ref == 'refs/heads/main' && assertion.sub == 'repo:onevalar@217557060/epic-recap@1437784855:environment:chrome-web-store'"
 release_mapping='google.subject=assertion.sub,attribute.repository_id=assertion.repository_id'
 if gcloud iam workload-identity-pools providers describe "$release_provider" --workload-identity-pool="$release_pool" --location=global --project="$release_project" >/dev/null 2>&1; then
   gcloud iam workload-identity-pools providers update-oidc "$release_provider" --workload-identity-pool="$release_pool" --location=global --issuer-uri=https://token.actions.githubusercontent.com --attribute-mapping="$release_mapping" --attribute-condition="$release_condition" --project="$release_project"
 else
   gcloud iam workload-identity-pools providers create-oidc "$release_provider" --workload-identity-pool="$release_pool" --location=global --issuer-uri=https://token.actions.githubusercontent.com --attribute-mapping="$release_mapping" --attribute-condition="$release_condition" --project="$release_project"
 fi
-gcloud iam service-accounts add-iam-policy-binding "$release_service" --project="$release_project" --role=roles/iam.workloadIdentityUser --member="principal://iam.googleapis.com/projects/${release_number}/locations/global/workloadIdentityPools/${release_pool}/subject/repo:onevalar/epic-recap:environment:chrome-web-store"
+gcloud iam service-accounts add-iam-policy-binding "$release_service" --project="$release_project" --role=roles/iam.workloadIdentityUser --member="principal://iam.googleapis.com/projects/${release_number}/locations/global/workloadIdentityPools/${release_pool}/subject/repo:onevalar@217557060/epic-recap@1437784855:environment:chrome-web-store"
 printf '\nGCP_WORKLOAD_IDENTITY_PROVIDER=projects/%s/locations/global/workloadIdentityPools/%s/providers/%s\nGCP_SERVICE_ACCOUNT=%s\n' "$release_number" "$release_pool" "$release_provider" "$release_service"
 printf '\nNext: add this service account in Chrome Web Store Account settings, set these two GitHub environment variables, then run the read-only status workflow.\n'

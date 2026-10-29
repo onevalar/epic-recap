@@ -34,5 +34,6 @@ jobs:
           const r=await fetch(`https://chromewebstore.googleapis.com/v2/publishers/${publisherId}/items/${itemId}:fetchStatus`,{headers:{Authorization:`Bearer ${process.env.CWS_ACCESS_TOKEN}`},signal:AbortSignal.timeout(30000)});
           if(!r.ok)throw new Error(`查询失败：HTTP ${r.status}`);
           const data=await r.json();
-          appendFileSync(process.env.GITHUB_STEP_SUMMARY,`## Chrome Web Store 状态\n\n已提交版本：${data.submittedItemRevisionStatus?.state || '无'}\n\n已上架版本：${data.publishedItemRevisionStatus?.state || '无'}\n`);
+          console.log(JSON.stringify(data,null,2));
+          appendFileSync(process.env.GITHUB_STEP_SUMMARY,`## Chrome Web Store 状态\n\n已提交状态：${data.submittedItemRevisionStatus?.state || '无'}\n\n已上架状态：${data.publishedItemRevisionStatus?.state || '无'}\n`);
           JS

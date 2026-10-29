@@ -35,7 +35,7 @@
 1. 在 Google Cloud 项目启用 Chrome Web Store API、IAM、IAM Credentials、Security Token Service。
 2. 创建专用服务账号 `epic-recap-publisher`，不授予项目级角色。
 3. 建立 GitHub OIDC provider，issuer 为 `https://token.actions.githubusercontent.com`，映射 `google.subject=assertion.sub`、`attribute.repository_id=assertion.repository_id`。
-4. 条件必须限定数值仓库 ID `1437784855`、owner ID `217557060`、`assertion.ref == 'refs/heads/main'`、subject `repo:onevalar/epic-recap:environment:chrome-web-store`。外部仓库、fork 和其他分支不能使用身份。
+4. 条件必须限定数值仓库 ID `1437784855`、owner ID `217557060`、`assertion.ref == 'refs/heads/main'`、subject `repo:onevalar@217557060/epic-recap@1437784855:environment:chrome-web-store`。外部仓库、fork 和其他分支不能使用身份。
 5. 只把这个 subject 以 `roles/iam.workloadIdentityUser` 绑定到专用服务账号。
 6. Chrome Web Store 开发者 Account 设置中添加服务账号邮箱。**Google 将授权该服务账号管理此发布者名下的项目，无法在此处只限定一个扩展；本工作流固定使用 Epic Recap 的 ID。**
 7. GitHub `chrome-web-store` environment 限制仅 main；添加环境变量 `GCP_WORKLOAD_IDENTITY_PROVIDER` 和 `GCP_SERVICE_ACCOUNT`。这些是资源名称，不是密钥。
