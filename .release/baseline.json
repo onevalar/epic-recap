@@ -1,0 +1,79 @@
+{
+  "version": "0.3.0",
+  "sourceRef": "a9c73d86a0a757e9ce99ef22ceeb92f4748f4416",
+  "manifest": {
+    "manifest_version": 3,
+    "name": "Epic Recap",
+    "version": "0.3.0",
+    "description": "记录网页操作、请求、报错、性能与关键截图，支持手动复现和站点持续回溯；检查敏感内容后导出本地问题报告，可选录制页面视频与声音。",
+    "minimum_chrome_version": "116",
+    "permissions": [
+      "scripting",
+      "tabs",
+      "downloads",
+      "activeTab",
+      "storage",
+      "unlimitedStorage",
+      "alarms",
+      "webRequest",
+      "system.cpu",
+      "system.memory",
+      "tabCapture",
+      "offscreen"
+    ],
+    "host_permissions": [
+      "<all_urls>"
+    ],
+    "background": {
+      "service_worker": "sw.js",
+      "type": "module"
+    },
+    "icons": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    },
+    "action": {
+      "default_popup": "popup.html",
+      "default_title": "Epic Recap",
+      "default_icon": {
+        "16": "icons/icon-16.png",
+        "32": "icons/icon-32.png",
+        "48": "icons/icon-48.png"
+      }
+    },
+    "commands": {
+      "toggle-recording": {
+        "description": "开始记录；再按一次停止并检查导出",
+        "suggested_key": {
+          "default": "Alt+Shift+E"
+        }
+      }
+    },
+    "content_scripts": [
+      {
+        "matches": [
+          "<all_urls>"
+        ],
+        "js": [
+          "privacy.js",
+          "hook.js"
+        ],
+        "run_at": "document_start",
+        "world": "MAIN",
+        "all_frames": true
+      },
+      {
+        "matches": [
+          "<all_urls>"
+        ],
+        "js": [
+          "bridge.js"
+        ],
+        "run_at": "document_start",
+        "all_frames": true
+      }
+    ]
+  }
+}

@@ -1,0 +1,38 @@
+name: 查询审核状态（只读）
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+  id-token: write
+jobs:
+  status:
+    if: github.ref == 'refs/heads/main'
+    environment: chrome-web-store
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        id: auth
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+          token_format: access_token
+          access_token_scopes: https://www.googleapis.com/auth/chromewebstore.readonly
+          access_token_lifetime: 300s
+          create_credentials_file: false
+      - name: 查询状态，不上传或发布
+        env:
+          CWS_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+        run: |
+          node --input-type=module <<'JS'
+          import {readFileSync,appendFileSync} from 'node:fs';
+          const {publisherId,itemId}=JSON.parse(readFileSync('.release/store.json'));
+          const r=await fetch(`https://chromewebstore.googleapis.com/v2/publishers/${publisherId}/items/${itemId}:fetchStatus`,{headers:{Authorization:`Bearer ${process.env.CWS_ACCESS_TOKEN}`},signal:AbortSignal.timeout(30000)});
+          if(!r.ok)throw new Error(`查询失败：HTTP ${r.status}`);
+          const data=await r.json();
+          appendFileSync(process.env.GITHUB_STEP_SUMMARY,`## Chrome Web Store 状态\n\n已提交版本：${data.submittedItemRevisionStatus?.state || '无'}\n\n已上架版本：${data.publishedItemRevisionStatus?.state || '无'}\n`);
+          JS

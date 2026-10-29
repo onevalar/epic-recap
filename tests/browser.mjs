@@ -22,7 +22,7 @@ let context;
 const checks=[];
 const passed=name=>{checks.push(name);console.log('PASS',name);};
 try{
- context=await chromium.launchPersistentContext(path.join(temp,'profile'),{headless:true,executablePath:browserPath,
+ context=await chromium.launchPersistentContext(path.join(temp,'profile'),{headless:true,channel:browserPath?undefined:"chromium",executablePath:browserPath,
    args:[`--disable-extensions-except=${appDir}`,`--load-extension=${appDir}`],ignoreDefaultArgs:['--disable-extensions'],acceptDownloads:true,downloadsPath:downloadDir});
  let worker=context.serviceWorkers()[0] || await context.waitForEvent('serviceworker');
  const extensionId=new URL(worker.url()).host;
@@ -41,6 +41,7 @@ try{
   const created=context.waitForEvent('page');await click('检查并导出');const review=await created;
   await review.waitForSelector('#content:not([hidden])');await review.waitForFunction(()=>document.getElementById('report').textContent.length>0);
   assert.equal(await review.locator('#export').isDisabled(),true);
+  await review.setViewportSize({width:1100,height:760});await review.evaluate(()=>document.fonts.ready);await review.screenshot({path:path.join(artifactDir,'review.png')});
   await review.locator('#reviewed').check();await review.waitForFunction(()=>!document.getElementById('export').disabled);
   await review.locator('#export').click();
   await review.waitForSelector(success?'#result:not([hidden])':'#error:not([hidden])');return review;
@@ -204,7 +205,7 @@ try{
  await click('开始记录');await waitView('recording');await a.click('#action');await click('停止记录');await waitView('stopped');
  await popup.locator('#note').fill('浏览器重启仍保留的问题说明');
  await context.close();
- context=await chromium.launchPersistentContext(path.join(temp,'profile'),{headless:true,executablePath:browserPath,
+ context=await chromium.launchPersistentContext(path.join(temp,'profile'),{headless:true,channel:browserPath?undefined:"chromium",executablePath:browserPath,
   args:[`--disable-extensions-except=${appDir}`,`--load-extension=${appDir}`,`--allowlisted-extension-id=${extensionId}`],ignoreDefaultArgs:['--disable-extensions'],acceptDownloads:true,downloadsPath:downloadDir});
  worker=context.serviceWorkers()[0] || await context.waitForEvent('serviceworker');
  const recovered=await context.newPage();await recovered.setViewportSize({width:360,height:600});
@@ -229,7 +230,7 @@ try{
  await videoPage.click('#action');await videoPage.waitForTimeout(2200);await api('stop',videoTab);
  assert.ok((await api('state',videoTab)).session.members[0].videoSize>1000);
  await context.close();
- context=await chromium.launchPersistentContext(path.join(temp,'profile'),{headless:true,executablePath:browserPath,
+ context=await chromium.launchPersistentContext(path.join(temp,'profile'),{headless:true,channel:browserPath?undefined:"chromium",executablePath:browserPath,
   args:[`--disable-extensions-except=${appDir}`,`--load-extension=${appDir}`],ignoreDefaultArgs:['--disable-extensions'],acceptDownloads:true,downloadsPath:downloadDir});
  worker=context.serviceWorkers()[0] || await context.waitForEvent('serviceworker');
  assert.equal((await api('state',99999)).session.members[0].video,'done');

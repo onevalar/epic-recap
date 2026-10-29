@@ -1,0 +1,21 @@
+Epic Recap 0.3.0 — Review instructions
+
+No Epic Recap account, subscription, backend, or API key is required. The UI is currently in Simplified Chinese. Test on an ordinary HTTP(S) website you control using synthetic, non-sensitive data. Reload pages that were open before installing the extension. Chrome internal pages cannot be recorded.
+
+Manual flow:
+1. Open a test website. Open the extension popup. Keep “复现问题” (manual reproduction) selected; video is disabled by default.
+2. Click “开始记录” (start recording). Interact with the site. A failed request or console error will appear in the diagnostic record. The toolbar shows recording status.
+3. Optionally click “标记问题发生在这里” to add a problem marker.
+4. Click “停止记录” (stop), then “检查并导出” (review and export).
+5. Inspect the report preview. Screenshots, video, and request/response bodies are excluded from the exported report by default; these may have been collected locally during recording.
+6. Review included content, explicitly acknowledge the review checkbox, and click “导出 ZIP”. Confirm that the local archive contains the report and only selected attachments.
+7. After finishing, start a new recording, or explicitly discard the retained recording. Unsaved records are not silently replaced.
+
+Multiple pages and continuous mode:
+Use “同时记录多个页面” to choose up to four pages. “等待偶发问题” enables continuous recording for selected site origins, with five-minute segments and at most ten saved segments per site. New eligible tabs may join as slots become available. Continuous mode excludes video. “导出片段” exports a selected recent range while recording continues; “停止持续记录” stops collection and retains the available data for review.
+
+Optional video:
+Before a manual recording, enable “视频（含页面声音）”. Start from the tab to be recorded. Additional pages may require their own user action/authorization. This captures tab video and tab audio, not camera/microphone. Stop and explicitly select the video in the review page before export.
+
+Privacy and architecture:
+No extension-operated server, analytics, advertisements, automatic AI upload, or remotely executed code. Data stays in browser storage/IndexedDB/memory until the user exports it. Page scripts are installed early for compatibility with page request wrappers, but diagnostic recording is gated on a user-started session. Sensitive text masking is best-effort; screenshots/video require user inspection. See the public privacy policy supplied in the Privacy practices tab.

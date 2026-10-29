@@ -1,0 +1,29 @@
+import assert from 'node:assert/strict';
+import { readFile, writeFile, mkdir, appendFile } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import { nextVersion, reviewFlags } from './lib.mjs';
+const git = (...args) => execFileSync('git',args,{encoding:'utf8'}).trim();
+const readJSON = async p => JSON.parse(await readFile(p,'utf8'));
+const current = await readJSON('manifest.json');
+const version = nextVersion(current.version, process.env.RELEASE_VERSION || 'patch');
+const baseline = await readJSON('.release/baseline.json');
+const ref = process.env.BASELINE_TAG || baseline.sourceRef;
+assert.match(ref,/^(v\d+\.\d+\.\d+|[a-f0-9]{40})$/);
+git('merge-base','--is-ancestor',ref,'HEAD');
+const previous = process.env.BASELINE_TAG ? JSON.parse(git('show',`${ref}:manifest.json`)) : baseline.manifest;
+const files = git('diff','--name-only',ref,'HEAD').split('\n').filter(Boolean);
+const flags = reviewFlags(previous,current,files);
+const changes = git('log','--format=%s',`${ref}..HEAD`).split('\n').filter(Boolean).filter(s=>!s.startsWith('chore(release):'));
+for (const name of ['manifest.json','package.json','package-lock.json']) {
+  const data = await readJSON(name); data.version = version;
+  if (data.packages?.['']) data.packages[''].version = version;
+  await writeFile(name,JSON.stringify(data,null,2)+'\n');
+}
+const notes = process.env.RELEASE_NOTES?.trim() || changes.map(s=>`- ${s}`).join('\n') || '- 维护更新';
+const report = `# Epic Recap ${version}\n\n${notes}\n\n## 发布检查\n\n${flags.length ? flags.map(s=>`- [ ] ${s}`).join('\n') : '未检测到权限、隐私或界面文件变化。'}\n\n更新说明默认来自 Git 提交标题，请核对是否适合公开。三张新截图使用自动测试的演示页面，作为候选素材；不会自动替换商店中的截图。\n\n基准：${ref}\n源代码：${git('rev-parse','HEAD')}\n`;
+await mkdir('dist/release',{recursive:true});
+await writeFile('dist/release/NOTES.md',report);
+await writeFile('dist/release/prepare.json',JSON.stringify({version,base:ref,sourceCommit:git('rev-parse','HEAD'),reviewRequired:flags.length>0,flags,files},null,2)+'\n');
+if (process.env.GITHUB_OUTPUT) await appendFile(process.env.GITHUB_OUTPUT,`version=${version}\nreview_required=${flags.length>0}\n`);
+if (process.env.GITHUB_STEP_SUMMARY) await appendFile(process.env.GITHUB_STEP_SUMMARY,report);
+console.log(`已准备版本 ${version}；需要核对：${flags.length} 项`);

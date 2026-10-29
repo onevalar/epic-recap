@@ -2,10 +2,10 @@
   "manifest_version": 3,
   "name": "Epic Recap",
   "version": "0.3.0",
-  "description": "手动开始、停止记录页面上的操作、请求、报错、性能和关键截图（可选视频，最长 10 分钟），一键导出成可以直接发给 AI 的本地文件。",
+  "description": "记录网页操作、请求、报错、性能与关键截图，支持手动复现和站点持续回溯；检查敏感内容后导出本地问题报告，可选录制页面视频与声音。",
   "minimum_chrome_version": "116",
   "permissions": [
-    "scripting", "tabs", "downloads", "downloads.ui", "activeTab", "storage", "unlimitedStorage", "alarms",
+    "scripting", "tabs", "downloads", "activeTab", "storage", "unlimitedStorage", "alarms",
     "webRequest", "system.cpu", "system.memory", "tabCapture", "offscreen"
   ],
   "host_permissions": ["<all_urls>"],

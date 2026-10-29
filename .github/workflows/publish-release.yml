@@ -1,0 +1,108 @@
+name: 确认发布
+run-name: 提交 ${{ inputs.version }} 到 Chrome 商店
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '已准备的完整版本号，例如 0.3.1'
+        required: true
+        type: string
+      metadata_confirmed:
+        description: '我已检查预览，并在商店后台完成需要的介绍、截图、权限及隐私更新'
+        default: false
+        type: boolean
+      publish_mode:
+        description: 'DEFAULT_PUBLISH 审核通过自动上架；STAGED_PUBLISH 通过后手动上架'
+        default: DEFAULT_PUBLISH
+        type: choice
+        options: [DEFAULT_PUBLISH, STAGED_PUBLISH]
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
+      metadata_confirmed:
+        default: false
+        type: boolean
+      publish_mode:
+        default: DEFAULT_PUBLISH
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: chrome-web-store-publish
+  cancel-in-progress: false
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/main'
+    environment: chrome-web-store
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+      - name: 下载并核对已准备的版本
+        env:
+          VERSION: ${{ inputs.version }}
+          GH_TOKEN: ${{ github.token }}
+          METADATA_CONFIRMED: ${{ inputs.metadata_confirmed }}
+        run: |
+          node --input-type=module -e "import {versionParts} from './scripts/release/lib.mjs'; versionParts(process.env.VERSION)"
+          git merge-base --is-ancestor "v$VERSION" origin/main
+          mkdir -p dist/release
+          gh release download "v$VERSION" --dir dist/release --pattern "epic-recap-$VERSION-chrome-web-store.zip" --pattern release.json
+          node --input-type=module <<'JS'
+          import {readFileSync} from 'node:fs';
+          import {execFileSync} from 'node:child_process';
+          import assert from 'node:assert/strict';
+          import {verifyBundle} from './scripts/release/lib.mjs';
+          const m=JSON.parse(readFileSync('dist/release/release.json'));
+          assert.equal(m.version,process.env.VERSION);
+          assert.equal(m.file,`epic-recap-${m.version}-chrome-web-store.zip`);
+          const manifest=verifyBundle(readFileSync(`dist/release/${m.file}`),m);
+          assert.deepEqual(manifest,JSON.parse(execFileSync('git',['show',`v${m.version}:manifest.json`],{encoding:'utf8'})));
+          assert.equal(m.sourceCommit,execFileSync('git',['rev-parse',`v${m.version}^`],{encoding:'utf8'}).trim());
+          assert.ok(!m.reviewRequired || process.env.METADATA_CONFIRMED==='true','请先核对预览和商店资料，再勾选确认');
+          JS
+      - name: 检查 Google 授权配置
+        env:
+          PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          SERVICE_ACCOUNT: ${{ vars.GCP_SERVICE_ACCOUNT }}
+        run: |
+          test -n "$PROVIDER" && test -n "$SERVICE_ACCOUNT" || { echo '尚未完成 Google 发布授权，详见 RELEASING.md'; exit 1; }
+      - name: 获取短期发布凭据
+        id: auth
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+          token_format: access_token
+          access_token_scopes: https://www.googleapis.com/auth/chromewebstore
+          access_token_lifetime: 900s
+          create_credentials_file: false
+      - name: 上传并提交审核
+        env:
+          CWS_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          METADATA_CONFIRMED: ${{ inputs.metadata_confirmed }}
+          PUBLISH_MODE: ${{ inputs.publish_mode }}
+        run: node scripts/release/publish.mjs
+      - name: 记录提交结果
+        env:
+          VERSION: ${{ inputs.version }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "v$VERSION" dist/release/submission-result.json --clobber
+          gh release edit "v$VERSION" --draft=false --title "Epic Recap $VERSION · 已提交 Chrome 商店"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: submission-result-${{ github.run_id }}
+          path: dist/release/submission-result.json
