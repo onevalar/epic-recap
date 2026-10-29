@@ -2,6 +2,16 @@
 
 入口：[GitHub Actions](https://github.com/onevalar/epic-recap/actions)。只允许从 main 运行，不会在每次提交代码时发版。
 
+## 当前配置
+
+2026-10-29 已连接 Google Cloud 项目 `able-math-457002-g0`、专用服务账号和 Chrome 商店发布者 anyujia。GitHub 的 `chrome-web-store` 环境仅允许 main，使用短期身份，不保存私钥。
+
+- [准备发版演练通过](https://github.com/onevalar/epic-recap/actions/runs/40812530415)：版本计算、单元测试、实际浏览器测试、ZIP 和三张截图预览均已跑通，没有创建新版本或提交商店。
+- [只读身份与 API 连接检查通过](https://github.com/onevalar/epic-recap/actions/runs/40813642902)。当前 API 没有返回 revision 状态，而商店后台显示 0.3.0 正在审核。不能把缺失字段理解成“没有待审核版本”。
+- 自动发布遇到状态缺失时会停止。实际上传/提交尚未执行；首次审核结束后，先重新运行“查询审核状态（只读）”，确认 API 返回版本状态，再发布后续版本。
+
+无需重复 Google 授权。下面“Google 授权”部分保留作为重建和维护说明。
+
 ## 准备发版
 
 选择“准备发版” → Run workflow。
@@ -23,10 +33,15 @@
 - `DEFAULT_PUBLISH`：提交审核，通过后自动上架。
 - `STAGED_PUBLISH`：提交审核，通过后需要在后台手动上架。
 - 商店已有其他版本等待审核/发布时，流程停止，不会自动取消它。
+- API 没有返回完整版本状态时，流程也会停止，不会上传；此时到商店后台查看实际状态。
 - API 返回相同版本已经提交/发布时不再次上传，可安全重跑以恢复 GitHub 提交记录。
 - GitHub Release 的“已提交 Chrome 商店”仅表示提交完成，不代表 Google 已审核通过。审核通知仍使用 Google 邮件和商店状态页。
 
 新截图是实际测试界面的模板排版预览，不会自动替换已批准的 Figma 设计。Chrome Web Store V2 API 没有商店文案和图片编辑接口，需要在后台更新；可以让助手代办。数据用途声明也必须按实际行为核对，不能靠文件差异保证准确。
+
+## 查询审核结果
+
+运行“查询审核状态（只读）”，在运行详情的 Summary 查看结果。它只查询，不上传、不提交、不取消审核；API 未返回信息时会明确提示，请以商店后台为准。这个流程没有定时轮询。
 
 ## Google 授权（首次配置）
 
@@ -43,4 +58,4 @@
 
 需要 Google 项目管理权限和一次明确的发布授权。不要把 OAuth token、服务账号 JSON 私钥或账号密码提交到仓库。
 
-官方参考：[服务账号](https://developer.chrome.com/docs/webstore/service-accounts)、[发布 API](https://developer.chrome.com/docs/webstore/api/reference/rest/v2/publishers.items/publish)、[GitHub OIDC](https://github.com/google-github-actions/auth)。
+官方参考：[服务账号](https://developer.chrome.com/docs/webstore/service-accounts)、[发布 API](https://developer.chrome.com/docs/webstore/api/reference/rest/v2/publishers.items/publish)、[GitHub OIDC](https://github.com/google-github-actions/auth)、[GitHub 新版身份标识](https://docs.github.com/en/actions/reference/security/oidc#immutable-subject-claims)。
