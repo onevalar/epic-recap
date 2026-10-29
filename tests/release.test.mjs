@@ -7,6 +7,7 @@ const bytes=zipSync({'manifest.json':strToU8(JSON.stringify({version:'0.3.1'}))}
 const meta={version:'0.3.1',sha256:sha256(bytes),reviewRequired:false};
 const config={publisherId:'publisher',itemId:'item'};
 const revision=(state,version)=>({state,distributionChannels:[{crxVersion:version}]});
+const published={publishedItemRevisionStatus:revision('PUBLISHED','0.3.0')};
 test('version increments and rejects malformed, equal, older or overflowing inputs',()=>{
   assert.equal(nextVersion('0.3.0','patch'),'0.3.1');
   assert.equal(nextVersion('0.3.5','minor'),'0.4.0');
@@ -33,20 +34,20 @@ test('never replace another pending or staged revision',()=>{
 });
 function api(responses){const calls=[];return {calls,fetcher:async(url,options)=>{calls.push({url,...options});assert.ok(responses.length,'unexpected HTTP call');const data=responses.shift();return {ok:true,status:200,json:async()=>data};}};}
 test('uploads ZIP then submits review with warning protection',async()=>{
-  const a=api([{}, {uploadState:'SUCCEEDED',crxVersion:'0.3.1'},{state:'PENDING_REVIEW'}]);
+  const a=api([published, {uploadState:'SUCCEEDED',crxVersion:'0.3.1'},{state:'PENDING_REVIEW'}]);
   const r=await publish({config,meta,bytes,token:'fake',...a});
   assert.equal(r.result,'submitted');assert.equal(a.calls.length,3);
   assert.equal(a.calls[1].body,bytes);
   assert.deepEqual(JSON.parse(a.calls[2].body),{publishType:'DEFAULT_PUBLISH',skipReview:false,blockOnWarnings:true});
 });
 test('asynchronous upload waits for success before publishing',async()=>{
-  const a=api([{}, {uploadState:'IN_PROGRESS'},{lastAsyncUploadState:'SUCCEEDED'},{state:'PENDING_REVIEW'}]);
+  const a=api([published, {uploadState:'IN_PROGRESS'},{lastAsyncUploadState:'SUCCEEDED'},{state:'PENDING_REVIEW'}]);
   await publish({config,meta,bytes,token:'fake',...a,sleep:async()=>{}});
   assert.equal(a.calls[2].method,'GET');assert.equal(a.calls[3].method,'POST');
 });
 test('failed or unknown uploads never submit',async()=>{
   for(const state of ['FAILED','NOT_FOUND',undefined]){
-    const a=api([{}, {uploadState:state}]);
+    const a=api([published, {uploadState:state}]);
     await assert.rejects(publish({config,meta,bytes,token:'fake',...a}));assert.equal(a.calls.length,2);
   }
 });
@@ -55,6 +56,14 @@ test('pending review is read-only and retry is idempotent',async()=>{
   await assert.rejects(publish({config,meta,bytes,token:'fake',...a}));assert.equal(a.calls.length,1);
   const b=api([{submittedItemRevisionStatus:revision('PENDING_REVIEW','0.3.1')}]);
   assert.equal((await publish({config,meta,bytes,token:'fake',...b})).result,'already-submitted');assert.equal(b.calls.length,1);
+});
+test('missing or incomplete store revisions never upload',async()=>{
+  for(const status of [{},{itemId:'item',publicKey:'public'},{submittedItemRevisionStatus:{state:'PENDING_REVIEW'}},{publishedItemRevisionStatus:{state:'PUBLISHED',distributionChannels:[{}]}}]){
+    const a=api([status]);
+    await assert.rejects(publish({config,meta,bytes,token:'fake',...a}),/完整版本状态/);
+    assert.equal(a.calls.length,1);
+    assert.equal(a.calls[0].method,'GET');
+  }
 });
 test('unreviewed metadata stops before any request',async()=>{
   const a=api([]);await assert.rejects(publish({config,meta:{...meta,reviewRequired:true},bytes,token:'fake',...a}));assert.equal(a.calls.length,0);

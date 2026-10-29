@@ -34,6 +34,11 @@ jobs:
           const r=await fetch(`https://chromewebstore.googleapis.com/v2/publishers/${publisherId}/items/${itemId}:fetchStatus`,{headers:{Authorization:`Bearer ${process.env.CWS_ACCESS_TOKEN}`},signal:AbortSignal.timeout(30000)});
           if(!r.ok)throw new Error(`查询失败：HTTP ${r.status}`);
           const data=await r.json();
-          console.log(JSON.stringify(data,null,2));
-          appendFileSync(process.env.GITHUB_STEP_SUMMARY,`## Chrome Web Store 状态\n\n已提交状态：${data.submittedItemRevisionStatus?.state || '无'}\n\n已上架状态：${data.publishedItemRevisionStatus?.state || '无'}\n`);
+          const submitted=data.submittedItemRevisionStatus,published=data.publishedItemRevisionStatus;
+          console.log(JSON.stringify({itemId:data.itemId,submitted,published,takenDown:data.takenDown,warned:data.warned},null,2));
+          appendFileSync(process.env.GITHUB_STEP_SUMMARY,`## Chrome Web Store 状态\n\n身份验证和 API 连接成功。\n\n已提交状态：${submitted?.state || 'API 未返回'}\n\n已上架状态：${published?.state || 'API 未返回'}\n`);
+          if(!submitted && !published) {
+            console.log('::warning::API 未返回版本状态，请以商店后台为准；自动发布会停止，不会上传。');
+            appendFileSync(process.env.GITHUB_STEP_SUMMARY,'\nAPI 未返回版本状态，不能据此认定没有待审核版本。请查看商店后台；自动发布会停止。\n');
+          }
           JS

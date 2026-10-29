@@ -38,6 +38,8 @@ export function verifyBundle(bytes, metadata) {
 }
 export function submissionDecision(status, version) {
   const submitted = status.submittedItemRevisionStatus;
+  const revisions = [submitted,status.publishedItemRevisionStatus].filter(Boolean);
+  assert.ok(revisions.length && revisions.every(r => r.state && r.distributionChannels?.length && r.distributionChannels.every(c => c.crxVersion)), '商店 API 未返回完整版本状态；请查看后台，未上传或提交。');
   const same = revision => revision?.distributionChannels?.some(c => c.crxVersion === version);
   if (same(status.publishedItemRevisionStatus)) return 'already-published';
   if (submitted && ['PENDING_REVIEW','STAGED'].includes(submitted.state)) {
