@@ -1,0 +1,91 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Only superseded PR runs share a group. Every main commit runs to completion.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    name: Tests and package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Fetch PR base
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: git fetch --no-tags --depth=1 origin "$BASE_SHA"
+      - name: Select checks
+        id: changes
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          node --input-type=module <<'JS'
+          import { execFileSync } from 'node:child_process';
+          import { appendFileSync } from 'node:fs';
+          let required = true;
+          if (process.env.GITHUB_EVENT_NAME === 'pull_request') {
+            const files = execFileSync('git', ['diff', '--name-only', '--no-renames', '-z', process.env.BASE_SHA, 'HEAD'], { encoding: 'utf8' }).split('\0').filter(Boolean);
+            // Scripts' Markdown (including the exported release guide) is not documentation-only.
+            required = !files.length || !files.every(file => file.startsWith('docs/') || /^[^/]+\.md$/.test(file));
+          }
+          appendFileSync(process.env.GITHUB_OUTPUT, `required=${required}\n`);
+          appendFileSync(process.env.GITHUB_STEP_SUMMARY, required ? 'Full validation required.\n' : 'Documentation-only PR: tests skipped; CI still reports success.\n');
+          JS
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        if: steps.changes.outputs.required == 'true'
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install dependencies
+        if: steps.changes.outputs.required == 'true'
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Unit tests
+        if: steps.changes.outputs.required == 'true'
+        run: npm test
+      - name: Release tests
+        if: steps.changes.outputs.required == 'true'
+        run: npm run test:release
+      - name: Install Chromium
+        if: steps.changes.outputs.required == 'true'
+        run: npx playwright install --with-deps chromium
+      - name: Browser tests
+        if: steps.changes.outputs.required == 'true'
+        env:
+          ARTIFACT_DIR: dist/browser
+        run: npm run test:browser
+      - name: Package and screenshot validation
+        if: steps.changes.outputs.required == 'true'
+        run: |
+          npm run package:store
+          npm run release:screenshots
+      - name: Browser failure evidence
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: browser-failure-${{ github.run_id }}
+          path: dist/browser/
+          retention-days: 7
+          if-no-files-found: ignore
+
+  ci:
+    name: CI
+    if: always()
+    needs: test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Require successful validation
+        env:
+          RESULT: ${{ needs.test.result }}
+        run: test "$RESULT" = success
