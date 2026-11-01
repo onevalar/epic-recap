@@ -55,7 +55,7 @@ jobs:
         run: |
           npm test
           npm run test:release
-          npx playwright install --with-deps chromium
+          npx playwright install --with-deps --no-shell chromium
           npm run test:browser
         env:
           ARTIFACT_DIR: dist/browser

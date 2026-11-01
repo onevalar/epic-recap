@@ -2,6 +2,18 @@
 
 入口：[GitHub Actions](https://github.com/onevalar/epic-recap/actions)。只允许从 main 运行，不会在每次提交代码时发版。
 
+## 提交与 PR 检查
+
+`CI` 工作流在 main 的每次 push、PR 更新及手动运行时执行，不会创建版本、发布草稿或提交商店审核。
+
+- main 始终执行全部检查；新 PR 提交只取消同一 PR 的旧 CI，不取消 main 或手动发版。
+- PR 只改根目录 Markdown 或 `docs/` 时跳过测试，但工作流仍启动并产生成功的 `CI` 汇总检查。混合代码变更、脚本目录的 Markdown、无法比较的基准不会静默跳过。
+- 分支保护若需要必需检查，应选择稳定的 `CI` 汇总名称，而非会被跳过的单项或矩阵检查。汇总会拒绝失败、取消和意外跳过；此配置本身不修改仓库的分支保护规则。
+- 单元、发版模板和打包检查与四组 Chromium 检查并行；截图生成仍会校验。默认 `npm run test:browser` 保留完整串行流程，`BROWSER_SUITE=recording|retry|limits|review` 可单独复现分组，每组使用独立临时浏览器配置及下载目录。
+- 仅使用 `setup-node` 的 npm 下载缓存，键由锁文件决定，不缓存 `node_modules`、打包产物或 Chromium。Ubuntu CI 使用预装系统库并保留 Playwright 的依赖检查，只下载匹配锁定 Playwright 版本的完整 Chromium，不下载未使用的 headless shell。失败截图保留 7 天；正式发版预览仍保留 30 天。
+
+GitHub Pages 使用独立的托管工作流，以上 PR 文档跳过规则不会停止隐私政策站点的发布。准备发版仍对更新版本号后的文件重新执行完整串行测试，不能用之前提交的 CI 代替。
+
 ## 当前配置
 
 2026-10-29 已连接 Google Cloud 项目 `able-math-457002-g0`、专用服务账号和 Chrome 商店发布者 anyujia。GitHub 的 `chrome-web-store` 环境仅允许 main，使用短期身份，不保存私钥。

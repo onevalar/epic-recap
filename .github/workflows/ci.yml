@@ -14,10 +14,12 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  test:
-    name: Tests and package
+  changes:
+    name: Select checks
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 2
+    outputs:
+      required: ${{ steps.changes.outputs.required }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Fetch PR base
@@ -42,38 +44,59 @@ jobs:
           appendFileSync(process.env.GITHUB_OUTPUT, `required=${required}\n`);
           appendFileSync(process.env.GITHUB_STEP_SUMMARY, required ? 'Full validation required.\n' : 'Documentation-only PR: tests skipped; CI still reports success.\n');
           JS
+
+  unit:
+    name: Unit, release and package
+    needs: changes
+    if: needs.changes.outputs.required == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        if: steps.changes.outputs.required == 'true'
+        with:
+          node-version: '22'
+      # These checks use the committed vendor files, not node_modules or npm's cache.
+      - run: npm test
+      - run: npm run test:release
+      - run: npm run package:store
+
+  browser:
+    name: Browser (${{ matrix.suite }})
+    needs: changes
+    if: needs.changes.outputs.required == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [recording, retry, limits, review]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
           cache: npm
       - name: Install dependencies
-        if: steps.changes.outputs.required == 'true'
         run: npm ci --ignore-scripts --no-audit --no-fund
-      - name: Unit tests
-        if: steps.changes.outputs.required == 'true'
-        run: npm test
-      - name: Release tests
-        if: steps.changes.outputs.required == 'true'
-        run: npm run test:release
+      # ubuntu-24.04 supplies Chromium's shared libraries. Playwright still validates
+      # them; don't disable its host checks. Both launchers use channel: chromium,
+      # so downloading a second, headless-shell browser serves no test.
       - name: Install Chromium
-        if: steps.changes.outputs.required == 'true'
-        run: npx playwright install --with-deps chromium
+        run: npx playwright install --no-shell chromium
       - name: Browser tests
-        if: steps.changes.outputs.required == 'true'
         env:
+          BROWSER_SUITE: ${{ matrix.suite }}
           ARTIFACT_DIR: dist/browser
         run: npm run test:browser
-      - name: Package and screenshot validation
-        if: steps.changes.outputs.required == 'true'
-        run: |
-          npm run package:store
-          npm run release:screenshots
+      - name: Screenshot validation
+        if: matrix.suite == 'recording'
+        run: npm run release:screenshots
       - name: Browser failure evidence
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: browser-failure-${{ github.run_id }}
+          name: browser-failure-${{ matrix.suite }}-${{ github.run_id }}
           path: dist/browser/
           retention-days: 7
           if-no-files-found: ignore
@@ -81,11 +104,20 @@ jobs:
   ci:
     name: CI
     if: always()
-    needs: test
+    needs: [changes, unit, browser]
     runs-on: ubuntu-24.04
     timeout-minutes: 2
     steps:
       - name: Require successful validation
         env:
-          RESULT: ${{ needs.test.result }}
-        run: test "$RESULT" = success
+          CHANGES: ${{ needs.changes.result }}
+          REQUIRED: ${{ needs.changes.outputs.required }}
+          UNIT: ${{ needs.unit.result }}
+          BROWSER: ${{ needs.browser.result }}
+        run: |
+          test "$CHANGES" = success
+          if [ "$REQUIRED" = false ]; then
+            test "$UNIT" = skipped && test "$BROWSER" = skipped
+          else
+            test "$REQUIRED" = true && test "$UNIT" = success && test "$BROWSER" = success
+          fi

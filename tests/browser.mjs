@@ -7,6 +7,8 @@ import { createRequire } from 'node:module';
 import { unzipSync, strFromU8 } from 'fflate';
 const require=createRequire(import.meta.url);
 const {chromium}=require(process.env.PLAYWRIGHT_MODULE || 'playwright');
+const suite=process.env.BROWSER_SUITE || 'all';
+assert.ok(['all','recording','retry','limits','review'].includes(suite),`Unknown browser suite: ${suite}`);
 const appDir=path.resolve(import.meta.dirname,'..');
 const temp=await fs.mkdtemp(path.join(os.tmpdir(),'recap-browser-'));
 const artifactDir=process.env.ARTIFACT_DIR || temp;await fs.mkdir(artifactDir,{recursive:true});
@@ -19,12 +21,22 @@ async function serve(title){const s=http.createServer((req,res)=>{if(req.url==='
 const [originA,originB]=await Promise.all([serve('订单管理'),serve('管理后台')]);
 const browserPath=process.env.CHROMIUM_PATH;
 let context;
+const readyWorker=async()=>{
+ const worker=context.serviceWorkers()[0] || await context.waitForEvent('serviceworker');
+ // The worker event can precede extension API/script initialization under parallel load.
+ const deadline=Date.now()+10000;
+ while(Date.now()<deadline){
+  if(await worker.evaluate(()=>Boolean(globalThis.epicTS)))return worker;
+  await new Promise(r=>setTimeout(r,10));
+ }
+ throw new Error('Extension worker did not initialize');
+};
 const checks=[];
 const passed=name=>{checks.push(name);console.log('PASS',name);};
 try{
  context=await chromium.launchPersistentContext(path.join(temp,'profile'),{headless:true,channel:browserPath?undefined:"chromium",executablePath:browserPath,
    args:[`--disable-extensions-except=${appDir}`,`--load-extension=${appDir}`],ignoreDefaultArgs:['--disable-extensions'],acceptDownloads:true,downloadsPath:downloadDir});
- let worker=context.serviceWorkers()[0] || await context.waitForEvent('serviceworker');
+ let worker=await readyWorker();
  const extensionId=new URL(worker.url()).host;
  const a=await context.newPage();await a.goto(originA);
  const b=await context.newPage();await b.goto(originB);
@@ -46,6 +58,7 @@ try{
   await review.locator('#export').click();
   await review.waitForSelector(success?'#result:not([hidden])':'#error:not([hidden])');return review;
  };
+ if(suite==='all'||suite==='recording'){
  await open();await waitView('home');assert.equal(await popup.locator('#video').isChecked(),false);
  assert.match(await popup.locator('body').evaluate(n=>getComputedStyle(n).fontFamily),/Alibaba/);await screenshot('home');passed('home defaults and embedded Alibaba font');
  await popup.locator('#video').uncheck();await click('同时记录多个页面');await waitView('multi');
@@ -69,6 +82,9 @@ try{
  await screenshot('continuous');await click('导出片段');await waitView('range');await reviewExport();await waitView('success');assert.equal((await api('state',bid)).continuous.active,true);
  await click('返回记录');await waitView('continuous');await a.click('#action');await click('停止持续记录');await waitView('stopped');cs=(await api('state',bid)).continuous;assert.equal(cs.active,false);assert.ok(cs.segments>=2);assert.ok(cs.totals.errors>=2);await screenshot('continuous-stopped');passed('multiple sites, export without stopping, and final segment retained after stop');
  await reviewExport();await waitView('success');await click('开始新的记录');await waitView('home');assert.equal((await api('state',bid)).continuous,null);
+ }
+ if(suite==='all'||suite==='retry'){
+ await open(bid);await waitView('home');
  // Exercise a real export operation with a deliberate download transport failure.
  await click('开始记录');await waitView('recording');await b.click('#action');await click('停止记录');await waitView('stopped');
  await worker.evaluate(()=>{globalThis.originalDownload=chrome.downloads.download;chrome.downloads.download=async()=>{throw new Error('测试下载失败');};});
@@ -79,6 +95,8 @@ try{
  await click('开始新的记录');await waitView('home');await click('开始记录');await waitView('recording');await click('停止记录');await waitView('stopped');
  await click('放弃这次记录');await waitView('discard');await click('返回，保留记录');await waitView('stopped');assert.ok((await api('state',bid)).session);
  await click('放弃这次记录');await click('放弃并开始新的记录');await waitView('home');assert.equal((await api('state',bid)).session,null);passed('discard cancellation preserves data and explicit confirmation clears it');
+ }
+ if(suite==='all'||suite==='limits'){
  const more=[];for(let i=0;i<3;i++){const p=await context.newPage();await p.goto(`${originA}/extra-${i}`);more.push(p);}
  await open(bid);await waitView('home');await click('同时记录多个页面');await waitView('multi');
  const available=popup.locator('.candidate input:not(:disabled)');
@@ -120,7 +138,9 @@ try{
  assert.equal((await api('state',waiting)).continuous.recording.length,4);
  await api('continuous-off',bid);await api('continuous-close',bid,{discard:true});
  passed('real tab close automatically admits the waiting page and preserves site coverage');
+ }
 
+ if(suite==='all'||suite==='review'){
  await open(aid);await waitView('home');await click('开始记录');await waitView('recording');
  await a.bringToFront();await a.click('#action');
  await popup.getByRole('button',{name:'停止记录',exact:true}).focus();
@@ -166,11 +186,12 @@ try{
   chrome.storage.local.set=values=>values.reviewDraft?Promise.reject(new Error('本机存储空间不足（测试）')):globalThis.originalStorageSet(values);
  });
  await review.locator('#redactions').fill('测试客户甲\n另一位客户');await review.locator('#error:not([hidden])').waitFor();
- await worker.evaluate(()=>{chrome.storage.local.set=globalThis.originalStorageSet;delete globalThis.originalStorageSet;});
+ await review.waitForFunction(()=>document.getElementById('save-status').textContent.startsWith('保存失败'));
  await review.locator('#reviewed').click();await review.waitForFunction(()=>!document.getElementById('reviewed').checked);
  assert.equal(await review.locator('#export').isDisabled(),true);
  assert.equal(await review.locator('#redactions').inputValue(),'测试客户甲\n另一位客户');
  await review.evaluate(()=>scrollTo(0,0));await review.screenshot({path:path.join(artifactDir,'review-save-error.png')});
+ await worker.evaluate(()=>{chrome.storage.local.set=globalThis.originalStorageSet;delete globalThis.originalStorageSet;});
  await review.locator('#redactions').fill('测试客户甲');await review.waitForFunction(()=>document.getElementById('save-status').textContent==='已保存到本机');
  await review.locator('#reviewed').check();await review.waitForFunction(()=>!document.getElementById('export').disabled);
  await review.locator('#expected').fill('显示订单编号并返回订单列表');
@@ -207,7 +228,7 @@ try{
  await context.close();
  context=await chromium.launchPersistentContext(path.join(temp,'profile'),{headless:true,channel:browserPath?undefined:"chromium",executablePath:browserPath,
   args:[`--disable-extensions-except=${appDir}`,`--load-extension=${appDir}`,`--allowlisted-extension-id=${extensionId}`],ignoreDefaultArgs:['--disable-extensions'],acceptDownloads:true,downloadsPath:downloadDir});
- worker=context.serviceWorkers()[0] || await context.waitForEvent('serviceworker');
+ worker=await readyWorker();
  const recovered=await context.newPage();await recovered.setViewportSize({width:360,height:600});
  await recovered.goto(`chrome-extension://${extensionId}/popup.html?tab=99999`);
  await recovered.getByText('已找回上次记录',{exact:true}).waitFor();
@@ -232,7 +253,7 @@ try{
  await context.close();
  context=await chromium.launchPersistentContext(path.join(temp,'profile'),{headless:true,channel:browserPath?undefined:"chromium",executablePath:browserPath,
   args:[`--disable-extensions-except=${appDir}`,`--load-extension=${appDir}`],ignoreDefaultArgs:['--disable-extensions'],acceptDownloads:true,downloadsPath:downloadDir});
- worker=context.serviceWorkers()[0] || await context.waitForEvent('serviceworker');
+ worker=await readyWorker();
  assert.equal((await api('state',99999)).session.members[0].video,'done');
  const videoReviewEvent=context.waitForEvent('page');await api('prepare-review',99999,{mode:'manual'});const videoReview=await videoReviewEvent;
  await videoReview.waitForFunction(()=>document.querySelector('video')?.videoWidth>0);
@@ -245,6 +266,7 @@ try{
  const videoZip=unzipSync(await fs.readFile(videoDownload[0].filename));const videoName=Object.keys(videoZip).find(n=>n.endsWith('.webm'));
  assert.ok(videoName);assert.deepEqual([...videoZip[videoName].slice(0,4)],[0x1a,0x45,0xdf,0xa3]);
  passed('real tab video remains playable and exports after browser restart; unselected video stays out');
+ }
  assert.deepEqual(errors,[]);
  await fs.writeFile(path.join(temp,'result.json'),JSON.stringify({checks,extensionId,downloadDir,errors},null,2));
  console.log('ARTIFACTS',artifactDir);
