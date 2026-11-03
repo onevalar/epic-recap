@@ -44,8 +44,24 @@ function setting(label, checked, change, {disabled=false, id=''} = {}) {
     onchange:() => change(input.checked) });
   return el('label', { className:`setting${disabled?' disabled':''}` }, p(label, 'grow'), input);
 }
+const READ_COMMANDS = new Set(['state', 'coverage', 'video-authorize']);
 async function call(name, options = {}) {
-  const r = await chrome.runtime.sendMessage({ type:'command', name, tabId, options });
+  // The backend can lose the first message while waking up after being idle.
+  // Read-only commands are bounded and retry once, so the popup never hangs on
+  // the loader; mutating commands still run exactly once.
+  const attempt = () => {
+    const send = chrome.runtime.sendMessage({ type:'command', name, tabId, options });
+    send.catch(() => {});
+    return Promise.race([send, new Promise(r => setTimeout(() => r(undefined), 8000))]);
+  };
+  let r;
+  if (READ_COMMANDS.has(name)) {
+    r = await attempt().catch(() => undefined);
+    if (!r) r = await attempt().catch(() => undefined);
+    if (!r) throw new Error('插件后台没有响应，请重新打开面板。');
+  } else {
+    r = await attempt();
+  }
   if (!r?.ok) throw new Error(r?.error || '插件后台没有响应，请重新打开面板。');
   return r.result;
 }
@@ -350,7 +366,10 @@ function render(force=false) {
   document.getElementById('announcements').textContent=ui.message||(changedView?({recording:'记录已开始',continuous:'持续记录已开始',stopped:'记录已保存',success:'导出已完成'}[current]||''):'');
 }
 
-try { await call('video-authorize'); } catch { ui.message='视频未开启，页面数据仍在记录。'; }
+// Video authorization only matters while a recording is active; the popup
+// already surfaces a re-authorize control. Never block the first render on it:
+// a swallowed wake-up message would otherwise stall the popup forever.
+call('video-authorize').catch(() => {});
 chrome.storage.onChanged.addListener((changes,area)=>{
   if(area!=='local')return;
   let changed=false;

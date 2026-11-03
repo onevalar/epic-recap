@@ -44,8 +44,16 @@ const tabOrNull = (tabId) => chrome.tabs.get(tabId).catch(() => null);
 const videoOf = (tabId) => getVideo(tabId).catch(() => ({}));
 
 async function pageState(tabId) {
-  let results;
-  try { results = await frames(tabId, () => window.__epicTS?.state() ?? null); } catch { return null; }
+  // A tab with a busy renderer (endless script loop, an open alert dialog)
+  // never answers an injection and nothing else times it out; treat it as
+  // absent instead of letting one bad tab hang the whole popup.
+  let results = null;
+  try {
+    const injection = frames(tabId, () => window.__epicTS?.state() ?? null);
+    injection.catch(() => {});
+    results = await Promise.race([injection, new Promise((r) => setTimeout(() => r(null), 3000))]);
+  } catch { return null; }
+  if (!results) return null;
   const top = topOf(results);
   if (!top) return null;
   const total = { ...top };
