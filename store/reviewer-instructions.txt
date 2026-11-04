@@ -3,16 +3,16 @@ Epic Recap 0.3.0 — Review instructions
 No Epic Recap account, subscription, backend, or API key is required. The UI is currently in Simplified Chinese. Test on an ordinary HTTP(S) website you control using synthetic, non-sensitive data. Reload pages that were open before installing the extension. Chrome internal pages cannot be recorded.
 
 Manual flow:
-1. Open a test website. Open the extension popup. Keep “复现问题” (manual reproduction) selected; video is disabled by default.
-2. Click “开始记录” (start recording). Interact with the site. A failed request or console error will appear in the diagnostic record. The toolbar shows recording status.
+1. Open a test website. Open the extension popup and click “单次录制” (single recording). The current page is preselected; video is disabled by default.
+2. Click “开始录制” (start recording). Interact with the site. A failed request or console error will appear in the diagnostic record. The toolbar shows recording status.
 3. Optionally click “标记问题发生在这里” to add a problem marker.
-4. Click “停止记录” (stop), then “检查并导出” (review and export).
+4. Click “停止录制” (stop). The review page opens automatically.
 5. Inspect the report preview. Screenshots, video, and request/response bodies are excluded from the exported report by default; these may have been collected locally during recording.
 6. Review included content, explicitly acknowledge the review checkbox, and click “导出 ZIP”. Confirm that the local archive contains the report and only selected attachments.
-7. After finishing, start a new recording, or explicitly discard the retained recording. Unsaved records are not silently replaced.
+7. A completed export ends the recording; the popup returns to its two entries. Until then, reopening the popup returns to the unfinished recording, which can also be explicitly discarded. Records are never silently replaced.
 
 Multiple pages and continuous mode:
-Use “同时记录多个页面” to choose up to four pages. “等待偶发问题” enables continuous recording for selected site origins, with five-minute segments and at most ten saved segments per site. New eligible tabs may join as slots become available. Continuous mode excludes video. “导出片段” exports a selected recent range while recording continues; “停止持续记录” stops collection and retains the available data for review.
+The single-recording setup page lets the reviewer choose up to four pages. “持续录制” (continuous recording) records selected site origins and keeps only the most recent thirty minutes. Only one of the two modes can run at a time. New eligible tabs may join as slots become available. With “视频（含页面声音）” on, continuous mode records video only for the tab where the user opened the popup (one tab at a time; tabs that join automatically never record video), as five-minute clips of which the last thirty minutes are kept (720p, 10 fps, about 0.8 Mbps), capped at 300 MB. Video pauses when less than 1 GB of disk space remains; event capture continues. “停止录制并导出” stops collection, keeps the thirty minutes before the stop, and opens the review page; exporting ends the continuous recording.
 
 Optional video:
 Before a manual recording, enable “视频（含页面声音）”. Start from the tab to be recorded. Additional pages may require their own user action/authorization. This captures tab video and tab audio, not camera/microphone. Stop and explicitly select the video in the review page before export.

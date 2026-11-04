@@ -20,6 +20,10 @@
     "toggle-recording": {
       "description": "开始记录；再按一次停止并检查导出",
       "suggested_key": { "default": "Alt+Shift+E" }
+    },
+    "mark-problem": {
+      "description": "记录中：标记问题发生在这里",
+      "suggested_key": { "default": "Alt+Shift+M" }
     }
   },
   "content_scripts": [

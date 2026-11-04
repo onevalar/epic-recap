@@ -6,7 +6,7 @@ import {
   prepareReview, getReview, updateReview, previewReview, exportReviewed,
 } from './export.js';
 import {
-  clearAllTabData, getContinuousSites, getSession, handleHandover, handleShotRequest, handleTick,
+  clearAllTabData, getSession, handleHandover, handleShotRequest, handleTick,
   onBeforeRequest, onCompleted, onErrorOccurred, onSendHeaders, recordSwitch,
 } from './capture.js';
 
@@ -32,7 +32,7 @@ async function dispatchCommand({ name, tabId, options = {} }) {
     case 'close': return closeSession(options);
     case 'export': return exportSession(await tab(), options.note, options);
     case 'video-authorize': return authorizeVideo(tabId);
-    case 'continuous-on': return startContinuousGroup(options.origins || [originOf((await tab()).url)], tabId);
+    case 'continuous-on': return startContinuousGroup(options.origins || [originOf((await tab()).url)], tabId, { video: Boolean(options.video) });
     case 'continuous-off': return stopContinuousGroup();
     case 'continuous-close': return closeContinuous(options);
     case 'export-range': return exportRange(await tab(), options);
@@ -78,9 +78,11 @@ async function toggleActiveTab() {
   const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
   if (!tab) return;
   try {
-    const origin = originOf(tab.url);
-    if (origin && (await getContinuousSites())[origin]) {
-      await withLifecycle(() => prepareReview(tab, { mode: 'continuous', minutes: 10 }));
+    // One task at a time: the shortcut always acts on the current one.
+    const run = await getContinuousRun();
+    if (run && !run.stoppedAt) {
+      await withLifecycle(() => stopContinuousGroup());
+      await withLifecycle(() => prepareReview(tab, { mode: 'continuous' }));
       flashBadge(tab.id, true, 'Epic Recap');
       return;
     }
@@ -95,6 +97,10 @@ async function toggleActiveTab() {
       await withLifecycle(() => prepareReview(tab, { mode: 'manual' }));
       return;
     }
+    if (run?.stoppedAt) {
+      await withLifecycle(() => prepareReview(tab, { mode: 'continuous' }));
+      return;
+    }
     const tabIds = [tab.id];
     const { prefVideo } = await chrome.storage.local.get('prefVideo');
     await withLifecycle(() => startSession(tabIds, { video: prefVideo === true }, tab.id));
@@ -103,8 +109,21 @@ async function toggleActiveTab() {
   }
 }
 
+// Problems are often fleeting; the shortcut marks them without opening the popup.
+async function markActiveTab() {
+  const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  if (!tab) return;
+  try {
+    await withLifecycle(() => markProblem(tab.id));
+    flashBadge(tab.id, true, '已标记问题');
+  } catch (err) {
+    flashBadge(tab.id, false, `标记失败：${err.message}`);
+  }
+}
+
 chrome.commands.onCommand.addListener((command) => {
   if (command === 'toggle-recording') toggleActiveTab();
+  if (command === 'mark-problem') markActiveTab();
 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
@@ -155,4 +174,4 @@ chrome.runtime.onStartup.addListener(() => {
 });
 
 // Lets automated tests drive the extension without opening the popup.
-globalThis.epicTS = { runCommand, toggleActiveTab, rotateSegment };
+globalThis.epicTS = { runCommand, toggleActiveTab, markActiveTab, rotateSegment };

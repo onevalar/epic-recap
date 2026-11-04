@@ -6,15 +6,19 @@
 //   stops on request or after MAX_MINUTES.
 // - continuous: switched on per site (a group of origins, e.g. two localhost
 //   ports); up to MAX_TABS of their tabs record all the time, cut into
-//   SEGMENT_MINUTES segments of which the last MAX_SEGMENTS per site are kept.
-//   Export picks a time range across all of them.
+//   SEGMENT_MINUTES segments covering the last CONTINUOUS_KEEP_MINUTES. Stopping ends
+//   the run; what is exported is the CONTINUOUS_KEEP_MINUTES before the stop. With video on, only a tab the
+//   user opened the popup on records (one at a time), as rolling clips.
 import { buildMarkdown, buildNetworkCsv } from './report.js';
 import {
-  MAX_MINUTES, SEGMENT_MINUTES, clearCollected, clearRecording, clearSegments, countShots, getCollected,
+  CONTINUOUS_KEEP_MINUTES, MAX_MINUTES, SEGMENT_MINUTES, clearCollected, clearRecording, clearSegments, countShots, getCollected,
   getContinuousSites, getRecording, getSession, getShots, getSwitches, handleShotRequest, listSegments, loadSegment,
   recordingTabsList, saveSegment, segmentBytes, setContinuousSite, setRecording, setSession,
 } from './capture.js';
-import { bundleFiles, discardVideo, getVideo, releaseBundle, startVideo, stopVideo } from './video.js';
+import {
+  CLIP_KEEP_MINUTES, bundleFiles, clearClips, cutRollingVideo, discardVideo, getVideo, listClips, releaseBundle, rollingVideoStatus, rollingVideoTabs,
+  startRollingVideo, startVideo, stopRollingVideo, stopVideo,
+} from './video.js';
 
 export const MAX_TABS = 4;
 export const MAX_VIDEO_TABS = MAX_TABS;
@@ -83,9 +87,17 @@ export async function getState(tabId, { candidates = false } = {}) {
     continuous: run || Object.keys(sites).length ? await describeContinuous(sites, tabId, origin, run) : null,
     exportTask: task && (!task.runId || task.runId === String(session?.startedAt) || task.runId === run?.id) ? task : null,
     candidates: candidates ? await candidateTabs(tabId) : [],
-    limits: { tabs: MAX_TABS, videoTabs: MAX_VIDEO_TABS, minutes: MAX_MINUTES },
+    limits: { tabs: MAX_TABS, videoTabs: MAX_VIDEO_TABS, minutes: MAX_MINUTES, videoKeepMinutes: CLIP_KEEP_MINUTES },
     markers: await getMarkers(session ? String(session.startedAt) : run?.id),
+    reviewOpen: await reviewTabOpen(),
   };
+}
+
+async function reviewTabOpen() {
+  const draft = (await chrome.storage.local.get('reviewDraft')).reviewDraft;
+  if (!draft) return false;
+  const url = chrome.runtime.getURL(`review.html?id=${draft.id}`);
+  return (await chrome.tabs.query({})).some(t => t.url?.startsWith(url));
 }
 
 async function describeSession(session, viewerTabId) {
@@ -151,7 +163,12 @@ async function describeContinuous(sites, viewerTabId, origin, run) {
   const active = groups.some(o => sites[o]);
   const waiting = active ? (await chrome.tabs.query({})).filter(t => groups.includes(originOf(t.url)) && !recording.some(r => r.tabId === t.id))
     .map(t => ({ tabId:t.id, origin:originOf(t.url), title:t.title })) : [];
+  const roll = active && run?.video ? await rollingVideoStatus().catch(() => ({ tabs: [] })) : { tabs: [] };
+  const videoTab = recording.find(r => r.tabId === roll.tabs[0]);
   return {
+    video: Boolean(run?.video), videoTab: videoTab ? { tabId: videoTab.tabId, title: videoTab.title, label: videoTab.label } : null,
+    videoError: roll.error || '', videoKeptMs: roll.keptMs || 0, videoBytes: roll.bytes || 0,
+    videoKeepMinutes: CLIP_KEEP_MINUTES,
     id: run?.id, active, startedAt: run?.startedAt, stoppedAt: run?.stoppedAt, lastExport: run?.lastExport,
     recovered: run?.recovered, stopReason: run?.recovered ? 'restart' : undefined,
     origins: groups.map(o => ({ origin: o, host: new URL(o).host, count: recording.filter(r => r.origin === o).length,
@@ -258,9 +275,14 @@ export async function closeSession({ discard = false } = {}) {
   const session = await getSession();
   if (session && !session.stoppedAt) throw new Error('记录还在进行，请先停止。');
   if (session && !discard && !session.lastExport) throw new Error('请先导出，或确认放弃这次记录。');
+  await endSession(session);
+  return {};
+}
+
+// A recording task ends when it is exported or discarded; the popup then starts from home.
+async function endSession(session) {
   await discardSession(session);
   await chrome.storage.local.remove(['exportTask', 'exportSnapshot']);
-  return {};
 }
 
 export async function joinSession(tabId) {
@@ -277,9 +299,17 @@ export async function joinSession(tabId) {
 // Opening the popup on a tab authorises its video; start it if the session wants one.
 export async function authorizeVideo(tabId) {
   const session = await getSession();
-  if (!session || session.stoppedAt) return {};
-  await maybeStartVideo(session, tabId);
+  if (session && !session.stoppedAt) await maybeStartVideo(session, tabId);
+  else if (!session) await maybeStartRollingVideo(tabId);
   return {};
+}
+
+// Continuous video needs the user's click on that very tab, so auto-joined tabs never record.
+async function maybeStartRollingVideo(tabId) {
+  const run = await getContinuousRun();
+  const rec = await getRecording(tabId);
+  if (!run?.video || run.stoppedAt || rec?.mode !== 'continuous' || (await rollingVideoTabs()).length) return;
+  await startRollingVideo(tabId);
 }
 
 export async function leaveSession(tabId) {
@@ -501,6 +531,7 @@ export async function rotateSegment(tabId, { restart }) {
   if (tab && originOf(tab.url) === rec.origin && (await getContinuousSites())[rec.origin]) {
     await startContinuous(tabId, rec.origin, { inject: true });
   } else {
+    if ((await getContinuousRun())?.video) await stopRollingVideo(tabId).catch(() => {});
     await clearRecording(tabId);
     await chrome.alarms.clear(`seg:${tabId}`);
     await clearBadge(tabId);
@@ -511,13 +542,14 @@ export async function enableContinuous(origin) {
   return startContinuousGroup([origin]);
 }
 
-export async function startContinuousGroup(origins, preferredTabId) {
+export async function startContinuousGroup(origins, preferredTabId, { video = false } = {}) {
   const chosen = [...new Set(origins)].filter(o => originOf(o) === o);
   if (!chosen.length || chosen.length !== new Set(origins).size || chosen.length > MAX_TABS) throw new Error('请选择 1–4 个有效站点。');
   if (await getSession()) throw new Error('请先导出或放弃现有记录。');
   if (await getContinuousRun() || Object.keys(await getContinuousSites()).length) throw new Error('已有持续记录，请先停止并处理记录。');
   await assertNoExport();
-  const run = { id: crypto.randomUUID(), origins: chosen, startedAt: Date.now(), stoppedAt: null };
+  const run = { id: crypto.randomUUID(), origins: chosen, startedAt: Date.now(), stoppedAt: null, video };
+  await clearClips().catch(() => {});
   await chrome.storage.session.set({ continuousRunId: run.id });
   await chrome.storage.local.set({ continuousRun: run });
   await chrome.storage.local.remove(['exportTask', 'continuousNote', 'continuousExpected', 'reviewDraft', 'problemMarks', 'continuousCheckpoint']);
@@ -527,6 +559,13 @@ export async function startContinuousGroup(origins, preferredTabId) {
   await checkpointRecordings();
   const plan = await continuousCoverage(chosen, preferredTabId);
   const problems = plan.unready.map(t => `${t.title}：需刷新页面`);
+  await chrome.storage.local.set({ prefVideo: video });
+  if (video) {
+    try {
+      if ((await getRecording(preferredTabId))?.mode !== 'continuous') problems.push('当前页面未在记录，视频将在你打开插件的记录页面上开始。');
+      else await maybeStartRollingVideo(preferredTabId);
+    } catch (err) { problems.push(err.message); }
+  }
   return { problems };
 }
 
@@ -569,6 +608,7 @@ export async function stopContinuousGroup() {
     await frames(r.tabId, () => window.__epicTS?.stop('continuous-stop')).catch(() => {});
     await rotateSegment(r.tabId, { restart: false });
   }
+  for (const tabId of await rollingVideoTabs().catch(() => [])) await stopRollingVideo(tabId).catch(() => {});
   run.stoppedAt = Date.now();
   delete run.lastExport;
   await chrome.storage.local.set({ continuousRun: run });
@@ -585,7 +625,13 @@ export async function closeContinuous({ discard = false } = {}) {
   if (!run) return {};
   if (!run.stoppedAt) throw new Error('请先停止持续记录。');
   if (!discard && !run.lastExport) throw new Error('请先导出，或确认放弃这次记录。');
+  await endContinuous(run);
+  return {};
+}
+
+async function endContinuous(run) {
   for (const origin of run.origins) await clearSegments(origin);
+  await clearClips().catch(() => {});
   await chrome.storage.local.remove(['continuousRun', 'continuousNote', 'continuousExpected', 'exportTask', 'exportSnapshot', 'continuousCheckpoint', 'reviewDraft', 'problemMarks']);
   await chrome.storage.session.remove('continuousRunId');
   return {};
@@ -629,7 +675,7 @@ const within = (from, to) => (x) => x.t >= from && x.t <= to;
 
 // Export the last `minutes` (0 = everything kept) across every tab of the continuous group.
 async function rangeSnapshot({ minutes = 10, note = '' } = {}) {
-  if (![0, 5, 10, 20].includes(minutes)) throw new Error('无效的导出范围。');
+  if (![0, 5, 10, 20, CONTINUOUS_KEEP_MINUTES].includes(minutes)) throw new Error('无效的导出范围。');
   const run = await getContinuousRun();
   if (!run) throw new Error('没有可导出的持续记录。');
   const now = run.stoppedAt || Date.now();
@@ -668,6 +714,12 @@ async function rangeSnapshot({ minutes = 10, note = '' } = {}) {
   }
   const parts = [...byTab.values()].filter((p) => p.events.length || p.shots.length || p.net.length);
   if (!parts.length) throw new Error('这段时间内没有记录到内容。');
+  // Clips are whole files, so one that overlaps the range is kept even if it starts earlier.
+  if (run.video) {
+    if (!run.stoppedAt) await cutRollingVideo().catch(() => {});
+    const clips = (await listClips().catch(() => [])).filter(c => c.endedAt >= from && c.startedAt >= run.startedAt);
+    for (const part of parts) part.clips = clips.filter(c => c.tabId === part.tabId);
+  }
   const startedAt = Math.max(from, Math.min(...parts.map((p) => p.startedAt)));
   return { runId: run.id, mode: 'continuous', parts, note,
     recording: { mode: 'continuous', startedAt, stoppedAt: run.stoppedAt || null, rangeEnd: now, rangeMinutes: minutes, segmentCount,
@@ -687,7 +739,8 @@ export async function exportRange(viewerTab, options = {}) {
 // A frozen local review draft makes preview, redaction, export and retry agree.
 export async function prepareReview(viewerTab, options = {}) {
   await assertNoExport();
-  const snapshot = options.mode === 'continuous' ? await rangeSnapshot(options) : await manualSnapshot(options.note);
+  const snapshot = options.mode === 'continuous'
+    ? await rangeSnapshot({ ...options, minutes: options.minutes ?? CONTINUOUS_KEEP_MINUTES }) : await manualSnapshot(options.note);
   let draft = (await chrome.storage.local.get('reviewDraft')).reviewDraft;
   const prefix = snapshot.mode === 'manual' ? 'manual' : 'continuous';
   const notes = await chrome.storage.local.get([`${prefix}Note`, `${prefix}Expected`]);
@@ -720,6 +773,7 @@ export async function getReview(id) {
     const video = await videoOf(part.tabId);
     part.video = video.url ? video : { startedAt:part.video.startedAt, error:'这段视频已不可用，请取消勾选后导出其他内容。' };
   }
+  await refreshClips(draft.snapshot.parts, (clip) => ({ ...clip, url: undefined, error:'这段视频已不可用，请取消勾选后导出其他内容。' }));
   const task = await getExportTask();
   return { ...draft, task: task?.runId === draft.snapshot.runId ? task : null };
 }
@@ -746,9 +800,17 @@ export async function updateReview(id, changes = {}) {
   return { reviewed: draft.reviewed };
 }
 
+// Blob URLs for clips live in the offscreen document; look them up again by id.
+async function refreshClips(parts, missing) {
+  if (!parts.some(p => p.clips?.length)) return;
+  const current = new Map((await listClips().catch(() => [])).map(c => [c.id, c]));
+  for (const part of parts) if (part.clips) part.clips = part.clips.map(c => current.get(c.id) || missing(c));
+}
+
 function reviewedSnapshot(draft) {
   const snapshot = structuredClone(draft.snapshot);
-  if (snapshot.parts.some(p => draft.includedVideos.includes(String(p.tabId)) && !p.video?.url)) {
+  if (snapshot.parts.some(p => (draft.includedVideos.includes(String(p.tabId)) && !p.video?.url)
+    || p.clips?.some(c => draft.includedVideos.includes(`clip:${c.id}`) && !c.url))) {
     throw new Error('所选视频已不可用，请取消勾选后导出其他内容。');
   }
   snapshot.parts = snapshot.parts.map(part => ({ ...part,
@@ -759,6 +821,7 @@ function reviewedSnapshot(draft) {
     shots: part.shots.filter(s => draft.includedShots.includes(`${part.tabId}:${s.id}`))
       .map(s => ({ ...s, dataUrl: draft.shotEdits[`${part.tabId}:${s.id}`] || s.dataUrl })),
     video: draft.includedVideos.includes(String(part.tabId)) ? part.video : null,
+    clips: (part.clips || []).filter(c => draft.includedVideos.includes(`clip:${c.id}`)),
   }));
   return { ...snapshot, note: draft.note, expected: draft.expected, redactions: draft.redactions,
     reviewedBundle: true, createdAt: draft.createdAt, reviewId: draft.id };
@@ -841,12 +904,18 @@ function buildExport(viewerTab, parts, { recording, switches, markers = [] }, no
     .map((s, i) => ({ ...s, file: `截图-${String(i + 1).padStart(2, '0')}-${fileLabel[s.tab]}.${s.dataUrl.startsWith('data:image/png') ? 'png' : 'jpg'}` }));
   // Named by port; several tabs on one port get a number.
   const videoNames = new Map();
-  const videos = parts.filter((p) => p.video?.url).map((p) => {
-    const base = `视频-${fileLabel[String(p.tabId)]}`;
+  const pad2 = (n) => String(n).padStart(2, '0');
+  const hhmm = (t) => { const d = new Date(t); return `${pad2(d.getHours())}${pad2(d.getMinutes())}`; };
+  const named = (base, video) => {
     const n = (videoNames.get(base) || 0) + 1;
     videoNames.set(base, n);
-    return { ...p.video, tab: String(p.tabId), file: `${base}${n > 1 ? `-${n}` : ''}.webm` };
-  });
+    return { ...video, file: `${base}${n > 1 ? `-${n}` : ''}.webm` };
+  };
+  const videos = [
+    ...parts.filter((p) => p.video?.url).map((p) => named(`视频-${fileLabel[String(p.tabId)]}`, { ...p.video, tab: String(p.tabId) })),
+    // Continuous clips also carry their start time, e.g. 视频-1432-8080 客户端.webm.
+    ...parts.flatMap((p) => (p.clips || []).filter((c) => c.url).map((c) => named(`视频-${hhmm(c.startedAt)}-${fileLabel[String(p.tabId)]}`, { ...c, tab: String(p.tabId) }))),
+  ];
   const net = parts.flatMap((p) => p.net.map(tag(p))).sort((a, b) => a.t - b.t);
 
   const files = { report: '问题报告.md' };
@@ -950,6 +1019,7 @@ async function retryExport(viewerTab) {
     if (!video.url) throw new Error('所选视频已不可用，请返回检查页取消勾选后重新导出。');
     part.video = video;
   }
+  await refreshClips(snapshot.parts, () => { throw new Error('所选视频已不可用，请返回检查页取消勾选后重新导出。'); });
   task.status = 'exporting'; delete task.error;
   await chrome.storage.local.set({ exportTask: task });
   return performExport(viewerTab, task, snapshot);
@@ -959,12 +1029,13 @@ async function performExport(viewerTab, task, snapshot) {
     const result = await saveExport(viewerTab, snapshot.parts, snapshot, snapshot.note, snapshot);
     task.status = 'complete'; task.result = result;
     await chrome.storage.local.set({ exportTask: task });
+    // Exported means handled: the task ends here. The review page keeps showing the result.
     if (task.mode === 'manual') {
       const session = await getSession();
-      if (String(session?.startedAt) === task.runId) { session.lastExport = result; await setSession(session); }
+      if (String(session?.startedAt) === task.runId) await endSession(session);
     } else {
       const run = await getContinuousRun();
-      if (run?.id === task.runId) { run.lastExport = result; await chrome.storage.local.set({ continuousRun: run }); }
+      if (run?.id === task.runId && run.stoppedAt) await endContinuous(run);
     }
     await chrome.storage.local.remove('exportSnapshot');
     return result;

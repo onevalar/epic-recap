@@ -104,10 +104,26 @@ test('delayed stopped export uses the stop time; interrupted downloads retain a 
  const result = await api.exportRange({ id: 1 }, { retry: true });
  assert.equal(result.folder, task.folder);
  assert.equal(result.endedAt, stoppedAt);
- assert.equal((await api.getExportTask()).id, task.id);
+ // A finished export is the end of the task: nothing is left to resume or discard.
+ assert.equal(await api.getExportTask(), null);
  assert.equal((await local.get('exportSnapshot')).exportSnapshot, undefined);
- await api.closeContinuous();
  assert.equal(await api.getContinuousRun(), null);
+ assert.deepEqual(await capture.listSegments(origin), []);
+});
+
+test('a stopped continuous run keeps and exports only the 30 minutes before the stop', async () => {
+ const stoppedAt = Date.now();
+ await local.set({ continuousRun: { id: 'run', origins: [origin], startedAt: stoppedAt - 60 * 60000, stoppedAt } });
+ const at = (minutes, message) => ({ ...part(stoppedAt - minutes * 60000), id: `1-${minutes}`, events: [{ id: message, t: stoppedAt - minutes * 60000 - 1000, type: 'error', message }] });
+ await capture.saveSegment(origin, at(40, '太早的错误'));
+ await capture.saveSegment(origin, at(20, '范围内的错误'));
+ await capture.saveSegment(origin, at(0, '停止前的错误'));
+ assert.deepEqual((await capture.listSegments(origin)).map(s => s.id), ['1-20', '1-0']);
+ downloadState = 'interrupted';
+ await assert.rejects(api.exportRange({ id: 1 }, { minutes: 30 }), /下载未完成/);
+ const { exportSnapshot } = await local.get('exportSnapshot');
+ assert.deepEqual(exportSnapshot.parts.flatMap(p => p.events.map(e => e.message)), ['范围内的错误', '停止前的错误']);
+ assert.equal(exportSnapshot.recording.startedAt >= stoppedAt - 30 * 60000, true);
 });
 
 test('service-worker restart makes an unfinished export retryable without deleting its snapshot', async () => {

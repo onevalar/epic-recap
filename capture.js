@@ -10,6 +10,8 @@ import './privacy.js';
 export const MAX_MINUTES = 10;
 export const SEGMENT_MINUTES = 5;
 export const MAX_SEGMENTS = 10;
+// Continuous mode keeps, and finally exports, this much before now (or before the stop).
+export const CONTINUOUS_KEEP_MINUTES = 30;
 const SHOT_LIMITS = { manual: { max: 18, reserved: 6 }, continuous: { max: 12, reserved: 4 } };
 const MIN_SHOT_GAP = 1000; // Chrome allows about two captures per second
 const MAX_NET = 5000;
@@ -335,6 +337,8 @@ export function saveSegment(origin, segment) {
     index.push({ id: segment.id, tabId: segment.tabId, startedAt: segment.startedAt, endedAt: segment.endedAt, title: segment.meta?.title, counts: segment.counts });
     index.sort((a, b) => a.startedAt - b.startedAt);
     const removed = index.splice(0, Math.max(0, index.length - MAX_SEGMENTS));
+    const cutoff = (segment.endedAt || Date.now()) - CONTINUOUS_KEEP_MINUTES * 60000;
+    while (index.length && index[0].endedAt < cutoff) removed.push(index.shift());
     await local.set({
       [KEY.segments(origin)]: index,
       [KEY.segment(segment.id)]: { ...data, shots: shots.map(({ dataUrl, ...s }) => s) },

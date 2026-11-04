@@ -29,9 +29,11 @@
           <p id="save-status" class="small muted" role="status"></p>
         </section>
         <section class="report-section" aria-labelledby="report-title">
-          <div class="section-title"><h2 id="report-title">报告预览</h2><span id="file-count" class="small muted"></span></div>
-          <p class="small muted">此处是将要导出的文本；额外隐藏内容会同步应用。</p>
-          <pre id="report" tabindex="0" aria-label="报告预览内容"></pre>
+          <div class="section-title"><h2 id="report-title">报告预览</h2>
+            <div class="segmented" role="group" aria-label="预览方式"><button id="show-rendered" type="button" aria-pressed="true">排版</button><button id="show-raw" type="button" aria-pressed="false">原文</button></div></div>
+          <p class="small muted">即将导出的报告，修改左侧内容后实时更新。<span id="file-count"></span></p>
+          <div id="report-view" class="report-box markdown" tabindex="0" aria-label="报告排版预览"></div>
+          <pre id="report" class="report-box" tabindex="0" aria-label="报告原文" hidden></pre>
           <details><summary>查看导出文件清单</summary><ul id="file-list"></ul></details>
         </section>
       </div>
@@ -41,30 +43,30 @@
         <div id="media-list" class="media-grid"></div>
       </section>
       <section id="result" class="export-result" hidden aria-labelledby="result-title">
-        <h2 id="result-title">ZIP 已保存</h2><p id="result-path" class="folder"></p>
+        <h2 id="result-title">ZIP 已保存，这次录制已结束</h2><p id="result-path" class="folder"></p>
         <div class="inline-actions"><button id="show-folder" class="btn secondary" type="button">打开文件夹</button><button id="copy-ai" class="btn secondary" type="button">复制给 AI 的说明</button></div>
         <p class="small muted">发送 ZIP 或解压后的文件，并附上问题说明。不会自动发送给任何人。</p>
       </section>
       <footer class="review-footer">
         <label class="check-line"><input id="reviewed" type="checkbox"><span>我已检查报告和所选附件，确认适合分享</span></label>
-        <div class="inline-actions"><button id="retry" class="btn secondary" type="button" hidden>重试上次导出</button><button id="export" class="btn primary" type="button" disabled>导出 ZIP</button></div>
+        <div class="inline-actions"><p class="footer-summary small muted"><span id="footer-summary"></span> <a href="#attachments-title">检查附件</a></p><button id="retry" class="btn secondary" type="button" hidden>重试上次导出</button><button id="export" class="btn primary" type="button" disabled>导出 ZIP</button></div>
       </footer>
     </div>
     <p id="announcements" class="sr-only" role="status"></p>
   </main>
   <dialog id="image-editor" aria-labelledby="editor-title">
     <div class="section-title"><h2 id="editor-title">遮挡敏感内容</h2><button id="close-editor" class="btn secondary" type="button">取消</button></div>
-    <p id="editor-help" class="small muted">在图片上拖动可添加不透明遮挡。也可用下方百分比输入选区；原图只保留在本机，不会随遮挡后的图片导出。</p>
+    <p id="editor-help" class="small muted">在图片上拖动，即可盖上不透明遮挡；导出时只包含遮挡后的图片。</p>
     <canvas id="editor-canvas" aria-label="截图遮挡画布" aria-describedby="editor-help" tabindex="0"></canvas>
-    <div class="rectangle-controls">
+    <details id="precise"><summary class="small">按百分比精确输入选区</summary><div class="rectangle-controls">
       <label>左侧 %<input id="rect-x" type="number" min="0" max="99" value="0" required></label>
       <label>顶部 %<input id="rect-y" type="number" min="0" max="99" value="0" required></label>
       <label>宽度 %<input id="rect-w" type="number" min="1" max="100" value="25" required></label>
       <label>高度 %<input id="rect-h" type="number" min="1" max="100" value="25" required></label>
       <button id="mask-rectangle" class="btn secondary" type="button">遮挡选区</button>
-    </div>
+    </div></details>
     <p id="editor-status" class="small muted" role="status"></p>
-    <div class="inline-actions"><button id="reset-image" class="btn secondary" type="button">还原原图</button><button id="save-image" class="btn primary" type="button">保存遮挡并加入导出</button></div>
+    <div class="editor-actions"><div class="inline-actions"><button id="undo-mask" class="btn secondary" type="button" disabled>撤销</button><button id="reset-image" class="btn quiet" type="button">还原原图</button></div><button id="save-image" class="btn primary" type="button">保存遮挡并加入导出</button></div>
   </dialog>
   <script type="module" src="review.js"></script>
 </body>

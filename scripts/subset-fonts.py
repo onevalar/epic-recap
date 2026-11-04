@@ -12,7 +12,7 @@ from fontTools.ttLib import TTFont
 
 ROOT = Path(__file__).resolve().parent.parent
 # UI plus backend messages displayed by the popup. Reports are exported documents.
-SOURCES = ('popup.js', 'export.js', 'video.js', 'sw.js', 'offscreen.js')
+SOURCES = ('popup.html', 'popup.js', 'review.html', 'review.js', 'export.js', 'video.js', 'sw.js', 'offscreen.js')
 
 def required_characters():
     characters = set(string.ascii_letters + string.digits + string.punctuation + ' ')
