@@ -34,7 +34,7 @@ const readyWorker=async()=>{
 const checks=[];
 const passed=name=>{checks.push(name);console.log('PASS',name);};
 try{
- context=await chromium.launchPersistentContext(path.join(temp,'profile'),{headless:true,channel:browserPath?undefined:"chromium",executablePath:browserPath,
+ context=await chromium.launchPersistentContext(path.join(temp,'profile'),{headless:true,deviceScaleFactor:2,channel:browserPath?undefined:"chromium",executablePath:browserPath,
    args:[`--disable-extensions-except=${appDir}`,`--load-extension=${appDir}`],ignoreDefaultArgs:['--disable-extensions'],acceptDownloads:true,downloadsPath:downloadDir});
  let worker=await readyWorker();
  const extensionId=new URL(worker.url()).host;
@@ -63,15 +63,34 @@ try{
  if(suite==='all'||suite==='recording'){
  await open();await waitView('home');assert.equal(await popup.locator('.entry').count(),2);
  assert.match(await popup.locator('body').evaluate(n=>getComputedStyle(n).fontFamily),/Alibaba/);await screenshot('home');passed('home offers the two recording entries in the embedded Alibaba font');
+ await popup.evaluate(()=>{
+  const send=chrome.runtime.sendMessage.bind(chrome.runtime);
+  window.resumeMessages=()=>{chrome.runtime.sendMessage=send;};
+  chrome.runtime.sendMessage=message=>message.name==='state'?Promise.resolve({ok:false,error:'读取失败（测试）'}):send(message);
+ });
+ await popup.locator('.message').filter({hasText:'读取失败（测试）'}).waitFor();await popup.evaluate(()=>window.resumeMessages());
+ await popup.locator('.message').filter({hasText:'读取失败（测试）'}).waitFor({state:'hidden'});
  await popup.locator('#entry-manual').click();await waitView('config');assert.equal(await popup.locator('#video').isChecked(),false);
  assert.equal(await popup.locator(`label[title="${originA}/"] input`).isChecked(),true,'the current page is preselected');
  await popup.locator(`label[title="${originB}/"] input`).check();
  await popup.locator('#search').fill('管理后台');assert.equal(await popup.locator('.candidate').count(),1);await popup.locator('#search').fill('');
+ await popup.locator('#search').pressSequentially('orders');await popup.keyboard.press('Control+z');
+ assert.notEqual(await popup.locator('#search').inputValue(),'orders','native undo must survive filtering');
+ await popup.keyboard.press('Control+y');assert.equal(await popup.locator('#search').inputValue(),'orders');
+ await popup.locator('#search').fill('');
+ const inputSession=await context.newCDPSession(popup);
+ await inputSession.send('Input.imeSetComposition',{text:'管',selectionStart:1,selectionEnd:1});
+ await inputSession.send('Input.imeSetComposition',{text:'管理',selectionStart:2,selectionEnd:2});
+ await inputSession.send('Input.insertText',{text:'管理后台'});
+ assert.equal(await popup.locator('#search').inputValue(),'管理后台');assert.equal(await popup.locator('.candidate').count(),1);
+ await inputSession.detach();await popup.locator('#search').fill('');
  await screenshot('config');await popup.locator(`label[title="${originB}/"] input`).uncheck();await click('单次录制');await waitView('home');
  assert.equal((await api('state',aid)).session,null);passed('an entry only opens its configuration; nothing records before start');
  await popup.locator('#entry-manual').click();await waitView('config');await click('开始录制');await waitView('recording');await a.click('#action');await popup.waitForFunction(()=>Number(document.querySelector('.metric strong')?.textContent)>0);
  await screenshot('recording');await open();await waitView('recording');assert.equal((await api('state',aid)).session.active,true);passed('manual recording captures real errors and survives popup reopen');
- await open(bid);await waitView('other');await screenshot('outside');await click('把此页面加入记录');await waitView('recording');assert.equal((await api('state',bid)).session.members.length,2);
+ await open(bid);await waitView('other');await screenshot('outside');
+ const elapsed=await popup.locator('.elapsed').textContent();await popup.waitForFunction(before=>document.querySelector('.elapsed').textContent!==before,elapsed);
+ await click('把此页面加入记录');await waitView('recording');assert.equal((await api('state',bid)).session.members.length,2);
  let review=await stopToReview();await waitView('stopped');assert.equal((await api('state',bid)).session.active,false);
  await open(bid);await waitView('stopped');assert.equal(await popup.locator('#open-review').textContent(),'回到检查页');await screenshot('stopped');
  await review.waitForSelector('#content:not([hidden])');await review.locator('#note').fill('订单提交失败，预期跳转到结果页面。');
@@ -85,7 +104,7 @@ try{
  await popup.locator('#entry-continuous').click();await waitView('config');assert.equal(await popup.locator('#video').isDisabled(),false);await popup.locator('#video').uncheck();assert.equal((await api('state',bid)).continuous,null);
  await popup.locator(`label[title="${originA}"] input`).check();await click('开启持续录制');await waitView('continuous');
  let cs=(await api('state',bid)).continuous;assert.equal(cs.origins.length,2);assert.equal(cs.recording.length,2);await a.click('#action');await b.click('#action');
- await screenshot('continuous');await a.click('#action');review=await stopToReview('停止录制并导出');await waitView('stopped');
+ await screenshot('continuous');await a.click('#action');review=await stopToReview('停止并检查');await waitView('stopped');
  cs=(await api('state',bid)).continuous;assert.equal(cs.active,false);assert.ok(cs.segments>=2);assert.ok(cs.totals.errors>=2);await screenshot('continuous-stopped');
  await exportIn(review);await waitView('home');assert.equal((await api('state',bid)).continuous,null);await review.close();
  passed('multiple sites; stopping keeps the last 30 minutes and its export ends the task');
@@ -103,6 +122,33 @@ try{
  // The failed attempt never produced a file; the retry produced exactly one ZIP. (lifecycle tests check it reuses the folder.)
  assert.equal(await completedZips(),zipsBefore+1);assert.ok(unzipSync(await fs.readFile((await lastDownload()).filename))['问题报告.md']);assert.ok(snapshotBefore.exportSnapshot);await retryReview.close();
  passed('failed download never claims success; retry uses the same snapshot and directory, then ends the task');
+ await popup.locator('#entry-manual').click();await waitView('config');await click('开始录制');await waitView('recording');await b.click('#action');
+ const pendingReview=await stopToReview();await pendingReview.waitForSelector('#content:not([hidden])');
+ await pendingReview.waitForFunction(()=>document.getElementById('report').textContent.length>0);
+ await pendingReview.locator('#reviewed').check();await pendingReview.waitForFunction(()=>!document.getElementById('export').disabled);
+ await worker.evaluate(()=>{
+  globalThis.originalDownload=chrome.downloads.download;
+  chrome.downloads.download=async options=>{await new Promise(resolve=>{globalThis.releaseDownload=resolve;});return globalThis.originalDownload(options);};
+ });
+ await pendingReview.locator('#export').click();await waitView('exporting');
+ await pendingReview.reload();await pendingReview.getByRole('button',{name:'正在打包并保存…'}).waitFor();
+ assert.equal(await pendingReview.locator('#note').isDisabled(),true,'reopening an in-progress export must lock its frozen content');
+ await pendingReview.evaluate(()=>{
+  const send=chrome.runtime.sendMessage.bind(chrome.runtime);
+  window.resumeProgress=()=>{chrome.runtime.sendMessage=send;};
+  chrome.runtime.sendMessage=message=>message.name==='state'?Promise.reject(new Error('连接中断（测试）')):send(message);
+ });
+ await pendingReview.locator('#error').filter({hasText:'正在重新连接'}).waitFor();
+ assert.equal(await pendingReview.locator('#export').isDisabled(),true);
+ await pendingReview.evaluate(()=>scrollTo(0,0));await pendingReview.screenshot({path:path.join(artifactDir,'export-reconnecting.png')});
+ await pendingReview.evaluate(()=>window.resumeProgress());
+ await pendingReview.locator('#error').waitFor({state:'hidden'});
+ await worker.evaluate(()=>{globalThis.releaseDownload();chrome.downloads.download=globalThis.originalDownload;});
+ await pendingReview.locator('#result:not([hidden])').waitFor();
+ assert.equal(await pendingReview.locator('#error').isVisible(),false,'completion remains visible after the backend removes the draft');
+ assert.equal(await pendingReview.evaluate(()=>document.activeElement.id),'result-title');
+ await pendingReview.close();await waitView('home');
+ passed('reopened pending export locks editing and receives the completed result without polling a deleted draft');
  await popup.locator('#entry-manual').click();await waitView('config');await click('开始录制');await waitView('recording');(await stopToReview()).close();await waitView('stopped');
  await click('放弃这次录制');await waitView('discard');await click('返回，保留录制');await waitView('stopped');assert.ok((await api('state',bid)).session);
  await click('放弃这次录制');await click('放弃');await waitView('home');assert.equal((await api('state',bid)).session,null);passed('discard cancellation preserves data and explicit confirmation clears it');
@@ -177,6 +223,7 @@ try{
  await review.locator('#include-bodies').check();await review.locator('#redactions').fill('测试客户甲');
  await review.waitForFunction(()=>document.getElementById('report').textContent.includes('blue-shirt')&&!document.getElementById('report').textContent.includes('测试客户甲'));
  text=await review.locator('#report').textContent();assert.doesNotMatch(text,/PRIVATE_BROWSER_TOKEN|PRIVATE_BODY_TOKEN|13800138000|qa@example.test/);
+ const secondReview=await context.newPage();await secondReview.goto(review.url());await secondReview.waitForSelector('.media-item img');
  await review.getByRole('button',{name:'查看并遮挡',exact:true}).first().click();
  await review.locator('dialog[open]').waitFor();assert.equal(await review.evaluate(()=>document.activeElement.id),'close-editor');
  await review.keyboard.press('Shift+Tab');assert.equal(await review.evaluate(()=>document.activeElement.id),'save-image');
@@ -191,23 +238,64 @@ try{
  await review.locator('#mask-rectangle').click();
  await review.mouse.move(bounds.x+bounds.width*0.6,bounds.y+bounds.height*0.1);await review.mouse.down();
  await review.mouse.move(bounds.x+bounds.width*0.8,bounds.y+bounds.height*0.3);await review.mouse.up();
- await review.screenshot({path:path.join(artifactDir,'editor.png')});await review.locator('#save-image').click();
+ await review.screenshot({path:path.join(artifactDir,'editor.png')});
+ await worker.evaluate(()=>{
+  globalThis.originalStorageSet=chrome.storage.local.set;
+  chrome.storage.local.set=values=>values.reviewDraft?Promise.reject(new Error('本机存储空间不足（测试）')):globalThis.originalStorageSet(values);
+ });
+ await review.locator('#save-image').click();await review.locator('#editor-error:not([hidden])').waitFor();
+ assert.match(await review.locator('#editor-error').textContent(),/遮挡未保存/);
+ assert.equal(await review.locator('dialog').evaluate(n=>n.open),true);
+ await worker.evaluate(()=>{
+  chrome.storage.local.set=async values=>{if(values.reviewDraft)await new Promise(resolve=>{globalThis.releaseSave=resolve;});return globalThis.originalStorageSet.call(chrome.storage.local,values);};
+ });
+ await review.locator('#save-image').click();
+ assert.equal(await review.locator('#close-editor').isDisabled(),true);
+ assert.equal(await review.locator('#mask-rectangle').isDisabled(),true);
+ await review.keyboard.press('Escape');assert.equal(await review.locator('dialog').evaluate(n=>n.open),true);
+ // A drag during save must not appear in the preview or the exported image.
+ await review.mouse.move(bounds.x+bounds.width*.9,bounds.y+bounds.height*.9);await review.mouse.down();
+ await review.mouse.move(bounds.x+bounds.width*.99,bounds.y+bounds.height*.99);await review.mouse.up();
+ await worker.evaluate(()=>{globalThis.releaseSave();chrome.storage.local.set=globalThis.originalStorageSet;});
  await review.waitForFunction(()=>!document.querySelector('dialog').open);assert.equal(await review.locator('.media-item input:checked').count(),1);
+ const savedImage=await review.locator('.media-item img').first().getAttribute('src');
+ await secondReview.waitForFunction(source=>document.querySelector('.media-item img').src===source,savedImage);
+ assert.equal(await secondReview.locator('.media-item input:checked').count(),1);
+ await secondReview.locator('.media-item input:checked').uncheck();
+ await review.waitForFunction(()=>document.querySelectorAll('.media-item input:checked').length===0);
+ await secondReview.locator('.media-item input').first().check();
+ await review.waitForFunction(()=>document.querySelectorAll('.media-item input:checked').length===1);
+ await secondReview.close();
+ passed('mask save errors stay inside the dialog; pending masks are locked; other review tabs show the actual saved image and selection');
  await worker.evaluate(()=>{
   globalThis.originalStorageSet=chrome.storage.local.set;
   chrome.storage.local.set=values=>values.reviewDraft?Promise.reject(new Error('本机存储空间不足（测试）')):globalThis.originalStorageSet(values);
  });
  await review.locator('#redactions').fill('测试客户甲\n另一位客户');await review.locator('#error:not([hidden])').waitFor();
  await review.waitForFunction(()=>document.getElementById('save-status').textContent.startsWith('保存失败'));
- await review.locator('#reviewed').click();await review.waitForFunction(()=>!document.getElementById('reviewed').checked);
+ assert.equal(await review.locator('#reviewed').isDisabled(),true);
+ assert.equal(await review.locator('#reviewed').isChecked(),false);
  assert.equal(await review.locator('#export').isDisabled(),true);
+ assert.equal(await review.locator('#redactions').inputValue(),'测试客户甲\n另一位客户');
+ await review.locator('#return').click();
+ assert.ok(review.url().includes('review.html'),'failed saves must not silently discard edits on return');
  assert.equal(await review.locator('#redactions').inputValue(),'测试客户甲\n另一位客户');
  await review.evaluate(()=>scrollTo(0,0));await review.screenshot({path:path.join(artifactDir,'review-save-error.png')});
  await worker.evaluate(()=>{chrome.storage.local.set=globalThis.originalStorageSet;delete globalThis.originalStorageSet;});
+ await review.locator('#retry-save').click();await review.waitForFunction(()=>document.getElementById('save-status').textContent==='已保存到本机');
+ assert.equal(await review.locator('#redactions').inputValue(),'测试客户甲\n另一位客户');
  await review.locator('#redactions').fill('测试客户甲');await review.waitForFunction(()=>document.getElementById('save-status').textContent==='已保存到本机');
  await review.locator('#reviewed').check();await review.waitForFunction(()=>!document.getElementById('export').disabled);
+ await review.evaluate(()=>{
+  const send=chrome.runtime.sendMessage.bind(chrome.runtime);
+  window.resumePreview=()=>{chrome.runtime.sendMessage=send;};
+  chrome.runtime.sendMessage=message=>message.name==='preview-review'?Promise.reject(new Error('预览暂时不可用（测试）')):send(message);
+ });
  await review.locator('#expected').fill('显示订单编号并返回订单列表');
  assert.equal(await review.locator('#reviewed').isChecked(),false);assert.equal(await review.locator('#export').isDisabled(),true);
+ await review.locator('#retry-preview:not([hidden])').waitFor();
+ assert.equal(await review.locator('#reviewed').isDisabled(),true,'saved content cannot be confirmed until its preview succeeds');
+ await review.evaluate(()=>window.resumePreview());await review.locator('#retry-preview').click();
  await review.locator('#reviewed').check();await review.waitForFunction(()=>!document.getElementById('export').disabled);
  await review.waitForFunction(()=>document.getElementById('report').textContent.includes('显示订单编号并返回订单列表'));
  const expectedReport=await review.locator('#report').textContent();
@@ -237,7 +325,7 @@ try{
  const restartReview=await stopToReview();await waitView('stopped');await restartReview.waitForSelector('#content:not([hidden])');
  await restartReview.locator('#note').fill('浏览器重启仍保留的问题说明');await restartReview.waitForFunction(()=>document.getElementById('save-status').textContent==='已保存到本机');
  await context.close();
- context=await chromium.launchPersistentContext(path.join(temp,'profile'),{headless:true,channel:browserPath?undefined:"chromium",executablePath:browserPath,
+ context=await chromium.launchPersistentContext(path.join(temp,'profile'),{headless:true,deviceScaleFactor:2,channel:browserPath?undefined:"chromium",executablePath:browserPath,
   args:[`--disable-extensions-except=${appDir}`,`--load-extension=${appDir}`,`--allowlisted-extension-id=${extensionId}`],ignoreDefaultArgs:['--disable-extensions'],acceptDownloads:true,downloadsPath:downloadDir});
  worker=await readyWorker();
  const recovered=await context.newPage();await recovered.setViewportSize({width:360,height:600});
@@ -282,7 +370,7 @@ try{
  await videoPage.click('#action');await videoPage.waitForTimeout(2200);await api('stop',videoTab);
  assert.ok((await api('state',videoTab)).session.members[0].videoSize>1000);
  await context.close();
- context=await chromium.launchPersistentContext(path.join(temp,'profile'),{headless:true,channel:browserPath?undefined:"chromium",executablePath:browserPath,
+ context=await chromium.launchPersistentContext(path.join(temp,'profile'),{headless:true,deviceScaleFactor:2,channel:browserPath?undefined:"chromium",executablePath:browserPath,
   args:[`--disable-extensions-except=${appDir}`,`--load-extension=${appDir}`],ignoreDefaultArgs:['--disable-extensions'],acceptDownloads:true,downloadsPath:downloadDir});
  worker=await readyWorker();
  assert.equal((await api('state',99999)).session.members[0].video,'done');

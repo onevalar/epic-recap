@@ -27,11 +27,14 @@
           <textarea id="redactions" placeholder="例如：客户名称、内部项目代号" maxlength="10000" aria-describedby="redactions-help"></textarea>
           <p id="redactions-help" class="small muted">应用到报告、网络清单和文件名，不会自动遮挡图片或视频。</p>
           <p id="save-status" class="small muted" role="status"></p>
+          <button id="retry-save" class="btn secondary" type="button" hidden>重试保存</button>
         </section>
         <section class="report-section" aria-labelledby="report-title">
           <div class="section-title"><h2 id="report-title">报告预览</h2>
             <div class="segmented" role="group" aria-label="预览方式"><button id="show-rendered" type="button" aria-pressed="true">排版</button><button id="show-raw" type="button" aria-pressed="false">原文</button></div></div>
           <p class="small muted">即将导出的报告，修改左侧内容后实时更新。<span id="file-count"></span></p>
+          <p id="preview-status" class="small muted" role="status"></p>
+          <button id="retry-preview" class="btn secondary" type="button" hidden>重试更新预览</button>
           <div id="report-view" class="report-box markdown" tabindex="0" aria-label="报告排版预览"></div>
           <pre id="report" class="report-box" tabindex="0" aria-label="报告原文" hidden></pre>
           <details><summary>查看导出文件清单</summary><ul id="file-list"></ul></details>
@@ -43,7 +46,7 @@
         <div id="media-list" class="media-grid"></div>
       </section>
       <section id="result" class="export-result" hidden aria-labelledby="result-title">
-        <h2 id="result-title">ZIP 已保存，这次录制已结束</h2><p id="result-path" class="folder"></p>
+        <h2 id="result-title" tabindex="-1">ZIP 已保存，这次录制已结束</h2><p id="result-path" class="folder"></p>
         <div class="inline-actions"><button id="show-folder" class="btn secondary" type="button">打开文件夹</button><button id="copy-ai" class="btn secondary" type="button">复制给 AI 的说明</button></div>
         <p class="small muted">发送 ZIP 或解压后的文件，并附上问题说明。不会自动发送给任何人。</p>
       </section>
@@ -56,6 +59,7 @@
   </main>
   <dialog id="image-editor" aria-labelledby="editor-title">
     <div class="section-title"><h2 id="editor-title">遮挡敏感内容</h2><button id="close-editor" class="btn secondary" type="button">取消</button></div>
+    <p id="editor-error" class="message" role="alert" hidden></p>
     <p id="editor-help" class="small muted">在图片上拖动，即可盖上不透明遮挡；导出时只包含遮挡后的图片。</p>
     <canvas id="editor-canvas" aria-label="截图遮挡画布" aria-describedby="editor-help" tabindex="0"></canvas>
     <details id="precise"><summary class="small">按百分比精确输入选区</summary><div class="rectangle-controls">

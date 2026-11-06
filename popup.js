@@ -6,7 +6,7 @@ const { dismissedExportId } = await chrome.storage.session.get('dismissedExportI
 const ui = { route: null, video: prefs.prefVideo === true, continuous: false, multi: false,
   picked: new Set(), sites: new Set(), query: '', mode: null, dismissed: dismissedExportId,
   markerNote: '', coverage: null,
-  message: '', notice: '', tone: '', busy: false, initialized: false };
+  message: '', stateError: '', notice: '', tone: '', busy: false, initialized: false };
 let state = null, candidates = [], refreshing = false, lastCandidatesAt = 0, signature = '';
 let pendingFocus = null;
 const shortcuts = Object.fromEntries((await chrome.commands.getAll().catch(() => [])).map(c => [c.name, c.shortcut]));
@@ -93,6 +93,8 @@ async function refresh(forceCandidates = false) {
   try {
     const withCandidates = forceCandidates || (!state || (!state.session && !state.continuous && Date.now()-lastCandidatesAt > 5000));
     const next = await call('state', { candidates:withCandidates });
+    // A recovered read must not clear an unrelated recording/export error.
+    ui.stateError = '';
     if (withCandidates) { candidates = next.candidates; lastCandidatesAt = Date.now(); }
     state = next;
     // Another popup, the keyboard shortcut, or the ten-minute timer can change the run.
@@ -111,18 +113,19 @@ async function refresh(forceCandidates = false) {
       for (const origin of ui.sites) if (!candidates.some(c => c.origin === origin && c.available)) ui.sites.delete(origin);
     }
     if (!ui.route && next.exportTask && next.exportTask.id !== ui.dismissed) ui.mode = next.exportTask.mode;
-  } catch (err) { ui.message = err.message; }
+  } catch (err) { ui.stateError = err.message; }
   finally { refreshing = false; render(); }
 }
-// Errors stay until the next action; confirmations fade on their own so they never outlive their screen.
+// Action errors stay until the next action; confirmations fade so they never outlive their screen.
 function notify(text, tone) {
   ui.message = text; ui.notice = text; ui.tone = tone;
   setTimeout(() => { if (ui.message === text) { ui.message = ''; render(true); } }, 4000);
 }
 function showMessage() {
-  if (!ui.message) return null;
-  const tone = ui.message === ui.notice ? ui.tone : 'warning';
-  return el('p', { className:`message ${tone}`, textContent:ui.message, role:tone === 'warning' ? 'alert' : 'status' });
+  const message = ui.message || ui.stateError;
+  if (!message) return null;
+  const tone = ui.message && ui.message === ui.notice ? ui.tone : 'warning';
+  return el('p', { className:`message ${tone}`, textContent:message });
 }
 function setVideo(on) {
   ui.video = on; chrome.storage.local.set({ prefVideo:on }).catch(err => { ui.message=err.message; render(true); }); render(true);
@@ -156,8 +159,8 @@ function siteCandidates() {
   const groups = new Map();
   for (const c of candidates) {
     if (!c.origin) continue;
-    if (!groups.has(c.origin)) groups.set(c.origin, { origin:c.origin, title:host(c.origin), url:c.origin, ready:false, count:0 });
-    const site = groups.get(c.origin); site.count++; site.ready ||= c.available;
+    if (!groups.has(c.origin)) groups.set(c.origin, { origin:c.origin, title:host(c.origin), url:c.origin, ready:false, current:false, count:0 });
+    const site = groups.get(c.origin); site.count++; site.ready ||= c.available; site.current ||= c.current;
   }
   return [...groups.values()].map(s => ({...s, available:s.ready, reason:s.ready?`${s.count} 个已打开页面`:'需刷新页面后才能记录'}));
 }
@@ -171,11 +174,12 @@ function configView() {
   for (const c of visible) {
     const key = ui.continuous ? c.origin : c.tabId, on = picked.has(key);
     const disabled = !c.available || (!on && picked.size >= state.limits.tabs);
-    const input = el('input', { type:'checkbox', checked:on, disabled:disabled || ui.busy, id:`candidate-${key}`, 'aria-label':c.title || c.label,
+    const descriptionId = `candidate-description-${key}`;
+    const input = el('input', { type:'checkbox', checked:on, disabled:disabled || ui.busy, id:`candidate-${key}`, 'aria-label':c.title || c.label || '未命名页面', 'aria-describedby':descriptionId,
       onchange:() => { if (input.checked) picked.add(key); else picked.delete(key); render(true); updateCoverage(); } });
-    const subtitle = !c.available || ui.continuous ? c.reason : `${host(c.url)}${c.current?' · 当前页面':''}`;
+    const subtitle = [!c.available || ui.continuous ? c.reason : '', c.current ? (ui.continuous ? '当前页面所在站点' : '当前页面') : '', c.url].filter(Boolean).join(' · ');
     list.append(el('label', { className:'candidate', title:c.url }, input, el('div', { className:'grow' },
-      p(c.title || c.label || '未命名页面', 'candidate-title ellipsis'), p(subtitle,'small muted ellipsis'))));
+      p(c.title || c.label || '未命名页面', 'candidate-title ellipsis'), el('p', { id:descriptionId, className:'small muted ellipsis', textContent:subtitle }))));
   }
   if (!visible.length) list.append(p(ui.query?'没有匹配的页面':'暂无可选择的页面','empty'));
   return [nav(ui.continuous?'持续录制':'单次录制', () => { ui.multi=false; navigate('home'); }),
@@ -220,14 +224,14 @@ function members() {
 function manualView(other=false) {
   const s=state.session, full=s.members.length>=state.limits.tabs;
   const status=row(badge('单次录制中','recording'),p(other?`${s.members.length} 个页面`:s.members.length===1?'当前页面':`${s.members.length} 个页面`,'small muted grow'),
-    other?p(mmss(Date.now()-s.startedAt),'medium semibold'):s.members.length===1&&s.members[0].video==='waiting'?el('button',{type:'button',className:'badge warning',textContent:'重新授权视频',onclick:()=>run(()=>call('video-authorize'))}):s.videoTabs?icon('videoOn'):s.members.length===1?badge('未录制视频'):null);
+    other?p(mmss(Date.now()-s.startedAt),'medium semibold elapsed'):s.members.length===1&&s.members[0].video==='waiting'?el('button',{type:'button',className:'badge warning',textContent:'重新授权视频',onclick:()=>run(()=>call('video-authorize'))}):s.videoTabs?icon('videoOn'):s.members.length===1?badge('未录制视频'):null);
   if(other) return [brand(),status,identity(),p('此页面未加入记录','page-title'),
     full?p('已达 4 个页面上限','medium muted'):!state.pageReady?p(state.origin?'刷新页面后即可加入':'此页面不支持记录','medium muted'):null,
     button('把此页面加入记录',()=>run(async()=>{await call('join'); ui.route=null;}),'primary',full||!state.pageReady),
     !full&&!state.pageReady&&state.origin?button('去刷新页面',()=>focusTab(tabId),'secondary'):null,
     button('查看正在录制的页面',()=>navigate('recording','manual'),'secondary'),button('停止录制',()=>run(()=>stop('manual')),'quiet')];
   return [!s.isMember?nav('正在记录的页面',()=>navigate('other','manual')):brand(),status,
-    el('div',{className:'time-block'},p(mmss(Date.now()-s.startedAt),'time'),p('10 分钟自动停止','small muted')),
+    el('div',{className:'time-block'},p(mmss(Date.now()-s.startedAt),'time elapsed'),p('10 分钟自动停止','small muted')),
     s.members.length===1 && s.isMember ? identity() : members(),
     metrics(s.totals),markerControl(s.isMember),button('停止录制',()=>run(()=>stop('manual')),'stop')];
 }
@@ -251,7 +255,7 @@ function continuousView() {
       c.videoError?p(c.videoError,'small error'):null,
       p(c.videoTab?`已保留 ${Math.min(c.videoKeepMinutes,Math.floor(c.videoKeptMs/60000))} 分钟 · ${Math.round(c.videoBytes/1048576)} MB；最多保留最近 ${c.videoKeepMinutes} 分钟。`:'在正在记录的页面上打开插件，即可从该页开始录制。','small muted')):null,
     markerControl(c.thisTabRecording),
-    button('停止录制并导出',()=>run(()=>stop('continuous')),'stop',false,'stop-continuous')];
+    button('停止并检查',()=>run(()=>stop('continuous')),'stop',false,'stop-continuous')];
 }
 function summary(which=mode()) {
   const s=which==='manual'?state.session:state.continuous;
@@ -291,7 +295,7 @@ async function retryExport() {
   }
 }
 function exportView(failed=false) {
-  if(!failed)return [brand(),el('div',{className:'success-block',role:'status'},el('div',{className:'spinner','aria-hidden':'true'}),el('h3',{textContent:'正在导出…'}),p('整理记录与附件','medium muted')),button('正在导出…',null,'primary',true)];
+  if(!failed)return [brand(),el('div',{className:'success-block'},el('div',{className:'spinner','aria-hidden':'true'}),el('h3',{textContent:'正在导出…'}),p('整理记录与附件','medium muted')),button('正在导出…',null,'primary',true)];
   return [brand(),badge('导出未完成','warning'),el('h3',{textContent:'下载未完成'}),p('记录已保留，可以重试。','muted'),
     p(state.exportTask?.error||ui.message,'small muted'),actions(button('重试导出',()=>run(retryExport)),button('返回检查页',()=>run(async()=>{await dismissTask();ui.route='stopped';await openReview();}),'quiet'))];
 }
@@ -303,18 +307,25 @@ function discardView() {
   return [brand(),badge('放弃录制','warning'),el('h3',{textContent:'放弃这次录制？'}),p('录制的内容和说明将被删除，无法恢复。','muted'),
     button('返回，保留录制',()=>navigate('stopped'),'secondary'),button('放弃',()=>run(()=>reset(true)),'danger')];
 }
+function replaceAround(parent, keep, children) {
+  const index = children.indexOf(keep);
+  for (const child of [...parent.childNodes]) if (child !== keep) child.remove();
+  parent.prepend(...children.slice(0, index));
+  parent.append(...children.slice(index + 1));
+}
 function render(force=false) {
   const current=route();
   if(app.dataset.view&&app.dataset.view!==current&&ui.message===ui.notice)ui.message='';
-  // Typing and range selection do not rerender from live sampling updates.
+  const message=ui.message||ui.stateError;
+  // Ignore sampling-only changes; keep native editing state when other content changes.
   const data=['stopped','discard','exporting','exportError'].includes(current)
     ?{run:subject()?.startedAt,active:subject()?.active,task:state?.exportTask,reviewOpen:state?.reviewOpen}
     :state&&{tabId:state.tabId,title:state.title,url:state.url,origin:state.origin,pageReady:state.pageReady,markers:state.markers,
       session:state.session&&{...state.session,totals:{errors:state.session.totals.errors,failedRequests:state.session.totals.failedRequests}},
       continuous:state.continuous&&{...state.continuous,newest:state.continuous.newest&&hhmm(state.continuous.newest)}};
   const next=JSON.stringify({current,data,video:ui.video,continuous:ui.continuous,multi:ui.multi,query:ui.query,
-    picked:[...ui.picked],sites:[...ui.sites],coverage:ui.coverage,message:ui.message,busy:ui.busy,candidates:current==='config'?candidates:null});
-  if(!force&&next===signature){for(const t of app.querySelectorAll('.time'))if(state?.session)t.textContent=mmss(Date.now()-state.session.startedAt);return;}
+    picked:[...ui.picked],sites:[...ui.sites],coverage:ui.coverage,message,busy:ui.busy,candidates:current==='config'?candidates:null});
+  if(!force&&next===signature){for(const t of app.querySelectorAll('.elapsed'))if(state?.session)t.textContent=mmss(Date.now()-state.session.startedAt);return;}
   signature=next;
   const focused=document.activeElement, focusId=focused?.id || pendingFocus, position=typeof focused?.selectionStart==='number'?[focused.selectionStart,focused.selectionEnd]:null;
   const changedView=app.dataset.view&&app.dataset.view!==current;
@@ -327,17 +338,36 @@ function render(force=false) {
     case 'continuous':children=continuousView();break;case 'stopped':children=stoppedView();break;
     case 'exporting':children=exportView();break;case 'exportError':children=exportView(true);break;
     case 'discard':children=discardView();break;
-    default:children=[brand(),p(ui.message?'无法读取记录':'正在读取记录…','muted'),ui.message?button('重试',()=>refresh(true),'secondary'):null];
+    default:children=[brand(),p(message?'无法读取记录':'正在读取记录…','muted'),message?button('重试',()=>refresh(true),'secondary'):null];
   }
   app.dataset.view=current;app.setAttribute('aria-busy',ui.busy?'true':'false');
-  app.replaceChildren(...children.filter(Boolean),...((ui.message&&current!=='exportError')?[showMessage()]:[]));
+  children=children.filter(Boolean);
+  if(message&&current!=='exportError')children.push(showMessage());
+  const input=!changedView&&app.querySelector('#search, #marker-note');
+  const nextSection=input&&children.find(child=>child.querySelector(`#${input.id}`));
+  if(nextSection){
+    // Keep the field AND its parent connected: detaching either cancels native
+    // composition. Avoid rewriting an unchanged value or restoring its selection.
+    const section=input.parentElement, replacement=nextSection.querySelector(`#${input.id}`);
+    if(input.value!==replacement.value)input.value=replacement.value;
+    replaceAround(section,input,[...nextSection.childNodes].map(child=>child===replacement?input:child));
+    replaceAround(app,section,children.map(child=>child===nextSection?section:child));
+  }else app.replaceChildren(...children);
   for(const n of app.querySelectorAll('button'))if(!n.id)n.id=`control-${n.textContent}`;
   const list=app.querySelector('#candidates');if(list)list.scrollTop=scroll;
-  if(focusId){const n=document.getElementById(focusId);if(n&&!n.disabled){n.focus({preventScroll:true});pendingFocus=null;if(position&&n.setSelectionRange)try{n.setSelectionRange(...position);}catch{}}}
+  if(focusId){const n=document.getElementById(focusId);if(n&&!n.disabled){if(n!==document.activeElement){n.focus({preventScroll:true});if(position&&n.setSelectionRange)try{n.setSelectionRange(...position);}catch{}}pendingFocus=null;}}
   if(changedView&&!ui.busy&&!app.contains(document.activeElement)){
     const heading=app.querySelector('h2,h1,.nav');if(heading){heading.tabIndex=-1;heading.focus({preventScroll:true});}pendingFocus=null;
   }
-  document.getElementById('announcements').textContent=ui.message||(changedView?({recording:'单次录制已开始',continuous:'持续录制已开始',stopped:'录制已停止，等待导出'}[current]||''):'');
+  const exportError=current==='exportError'?`导出未完成。${state.exportTask?.error||ui.message||'记录已保留，可以重试。'}`:'';
+  const announcement=exportError||message||(current==='exporting'?'正在导出，整理记录与附件':changedView?({recording:'单次录制已开始',continuous:'持续录制已开始',stopped:'录制已停止，等待导出'}[current]||''):'');
+  const announcer=document.getElementById('announcements');
+  // One persistent live region; incidental redraws must not repeat its message.
+  if(announcer.textContent!==announcement){
+    const urgent=exportError||(ui.message&&ui.message!==ui.notice)||(!state&&ui.stateError);
+    announcer.setAttribute('aria-live',urgent?'assertive':'polite');
+    announcer.textContent=announcement;
+  }
 }
 
 // Video authorization only matters while a recording is active; the popup

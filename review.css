@@ -8,5 +8,11 @@
 .segmented{display:inline-flex;padding:2px;border:1px solid var(--line);border-radius:10px;background:var(--soft)}.segmented button{min-height:30px;padding:4px 12px;border:0;border-radius:8px;background:none;color:var(--muted);font-size:13px;font-weight:600}.segmented button[aria-pressed=true]{background:var(--soft-hover);color:var(--fg)}
 .review-footer .inline-actions{align-items:center}.footer-summary a{color:var(--accent-fg)}
 .editor-actions{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}#precise{margin-bottom:12px}#precise summary{color:var(--muted);margin-bottom:8px}
+/* Confirmation follows the attachments instead of covering the report and privacy fields. */
+.review-footer{position:static}
+.review-page :is(summary,[tabindex]):focus-visible{outline:2px solid var(--accent-fg);outline-offset:3px}
+.review-page :is(input,textarea,button,summary,[tabindex]){scroll-margin-block:16px}
+.review-page .segmented button,.review-page summary{min-height:44px}
+#preview-status{min-height:22px}#retry-preview{margin-bottom:12px}#editor-canvas[aria-disabled=true]{cursor:wait}
 @media(max-width:800px){.review-header{padding:20px}.review-main{padding:24px 20px}.review-columns{grid-template-columns:1fr;gap:28px}.media-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.review-footer{position:static;align-items:stretch;flex-direction:column;gap:12px}.review-footer .btn{flex:1}.review-title{align-items:flex-start;gap:16px}.review-title h1{font-size:24px}#report{max-height:440px}}
 @media(max-width:480px){.review-header{padding:16px;align-items:flex-start}.review-header>span{max-width:116px;text-align:right}.review-main{padding:24px 16px}.review-title{flex-wrap:wrap}.media-grid{grid-template-columns:1fr}.review-page .section-title{align-items:flex-start;flex-wrap:wrap}dialog{padding:16px}.rectangle-controls{gap:8px}.rectangle-controls input{width:72px}.inline-actions>.btn{flex:1}.review-footer .check-line{font-size:13px}}
