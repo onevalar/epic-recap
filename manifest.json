@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Recap",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "记录网页操作、请求、报错、性能与关键截图，支持手动复现和站点持续回溯；检查敏感内容后导出本地问题报告，可选录制页面视频与声音。",
   "minimum_chrome_version": "116",
   "permissions": [
