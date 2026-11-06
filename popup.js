@@ -28,7 +28,7 @@ const row = (...children) => el('div', { className:'row' }, ...children);
 const stack = (...children) => el('div', { className:'stack' }, ...children);
 const actions = (...children) => el('div', { className:'actions' }, ...children);
 const badge = (text, kind = '') => el('span', { className:`badge ${kind}`, textContent:text });
-const brand = () => el('header', { className:'brand' }, el('img', { src:'assets/07f59.png', width:24, height:24, alt:'' }), el('h1', { textContent:'Epic Recap' }));
+const brand = () => el('header', { className:'brand' }, el('img', { src:'assets/07f59.png', width:24, height:24, alt:'' }), el('h1', { textContent:'Recap' }));
 function button(label, action, kind = 'primary', disabled = false, id = '') {
   return el('button', { type:'button', className:`btn ${kind}`, textContent:label, disabled:disabled || ui.busy, id:id || `button-${label}`, onclick:action });
 }

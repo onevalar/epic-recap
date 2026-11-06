@@ -1,6 +1,6 @@
-Epic Recap 0.3.0 — Review instructions
+Recap 0.4.1 — Review instructions
 
-No Epic Recap account, subscription, backend, or API key is required. The UI is currently in Simplified Chinese. Test on an ordinary HTTP(S) website you control using synthetic, non-sensitive data. Reload pages that were open before installing the extension. Chrome internal pages cannot be recorded.
+No Recap account, subscription, backend, or API key is required. The UI is currently in Simplified Chinese. Test on an ordinary HTTP(S) website you control using synthetic, non-sensitive data. Reload pages that were open before installing the extension. Chrome internal pages cannot be recorded.
 
 Manual flow:
 1. Open a test website. Open the extension popup and click “单次录制” (single recording). The current page is preselected; video is disabled by default.

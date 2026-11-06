@@ -1,4 +1,4 @@
-# Epic Recap 发版
+# Recap 发版
 
 入口：[GitHub Actions](https://github.com/onevalar/epic-recap/actions)。只允许从 main 运行，不会在每次提交代码时发版。
 
@@ -64,7 +64,7 @@ GitHub Pages 使用独立的托管工作流，以上 PR 文档跳过规则不会
 3. 建立 GitHub OIDC provider，issuer 为 `https://token.actions.githubusercontent.com`，映射 `google.subject=assertion.sub`、`attribute.repository_id=assertion.repository_id`。
 4. 条件必须限定数值仓库 ID `1437784855`、owner ID `217557060`、`assertion.ref == 'refs/heads/main'`、subject `repo:onevalar@217557060/epic-recap@1437784855:environment:chrome-web-store`。外部仓库、fork 和其他分支不能使用身份。
 5. 只把这个 subject 以 `roles/iam.workloadIdentityUser` 绑定到专用服务账号。
-6. Chrome Web Store 开发者 Account 设置中添加服务账号邮箱。**Google 将授权该服务账号管理此发布者名下的项目，无法在此处只限定一个扩展；本工作流固定使用 Epic Recap 的 ID。**
+6. Chrome Web Store 开发者 Account 设置中添加服务账号邮箱。**Google 将授权该服务账号管理此发布者名下的项目，无法在此处只限定一个扩展；本工作流固定使用 Recap 的 ID。**
 7. GitHub `chrome-web-store` environment 限制仅 main；添加环境变量 `GCP_WORKLOAD_IDENTITY_PROVIDER` 和 `GCP_SERVICE_ACCOUNT`。这些是资源名称，不是密钥。
 8. 先运行只读连接检查，再启用正式发布。不要用正在审核的 0.3.0 测试上传。
 
@@ -72,12 +72,12 @@ GitHub Pages 使用独立的托管工作流，以上 PR 文档跳过规则不会
 
 ## 复用到其他 Chrome 插件
 
-运行 `npm run release:template`，得到 `dist/chrome-extension-release-template.zip`。通用工作流从新项目的 package.json 和 manifest.json 读取包名及展示名称，不再固定为 Epic Recap。
+运行 `npm run release:template`，得到 `dist/chrome-extension-release-template.zip`。通用工作流从新项目的 package.json 和 manifest.json 读取包名及展示名称，不再固定为 Recap。
 
 模板包含三条工作流、版本/校验/上传脚本、初始化命令和接入说明；不包含本项目的商店 ID、Google 身份、界面或截图。解压到新插件前先比较同名文件。详细约定见 [模板接入说明](scripts/release/template-guide.md)。
 
-新项目只需要接入自身的测试、构建和截图命令，填写自己的商店扩展 ID，并为仓库配置一次 Google 身份绑定。同一商店发布者可以沿用现有服务账号，但新仓库仍需单独授权；不能直接复制 Epic Recap 的 Google 匹配条件，也不要覆盖旧仓库的绑定。
+新项目只需要接入自身的测试、构建和截图命令，填写自己的商店扩展 ID，并为仓库配置一次 Google 身份绑定。同一商店发布者可以沿用现有服务账号，但新仓库仍需单独授权；不能直接复制 Recap 的 Google 匹配条件，也不要覆盖旧仓库的绑定。
 
-之后可直接让助手“按 Epic Recap 模板接入这个插件”，提供项目路径、GitHub 仓库和商店扩展 ID。接入完成后的日常操作与这里相同。
+之后可直接让助手“按 Recap 模板接入这个插件”，提供项目路径、GitHub 仓库和商店扩展 ID。接入完成后的日常操作与这里相同。
 
 官方参考：[服务账号](https://developer.chrome.com/docs/webstore/service-accounts)、[发布 API](https://developer.chrome.com/docs/webstore/api/reference/rest/v2/publishers.items/publish)、[GitHub OIDC](https://github.com/google-github-actions/auth)、[GitHub 新版身份标识](https://docs.github.com/en/actions/reference/security/oidc#immutable-subject-claims)。

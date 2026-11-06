@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "Epic Recap",
+  "name": "Recap",
   "version": "0.4.0",
   "description": "记录网页操作、请求、报错、性能与关键截图，支持手动复现和站点持续回溯；检查敏感内容后导出本地问题报告，可选录制页面视频与声音。",
   "minimum_chrome_version": "116",
@@ -33,7 +33,7 @@
   },
   "action": {
     "default_popup": "popup.html",
-    "default_title": "Epic Recap",
+    "default_title": "Recap",
     "default_icon": {
       "16": "icons/icon-16.png",
       "32": "icons/icon-32.png",

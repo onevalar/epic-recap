@@ -867,7 +867,7 @@ const safeName = (s, max = 30) => (s || '').replace(/[\\/:*?"<>|~\u0000-\u001f]+
 function folderName(exportedAt) {
   const d = new Date(exportedAt);
   const p = (n) => String(n).padStart(2, '0');
-  return `Epic Recap/${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}-${p(d.getMinutes())}-${p(d.getSeconds())}`;
+  return `Recap/${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}-${p(d.getMinutes())}-${p(d.getSeconds())}`;
 }
 
 const textUrl = (type, text) => `data:${type};charset=utf-8,${encodeURIComponent(text)}`;

@@ -83,14 +83,14 @@ async function toggleActiveTab() {
     if (run && !run.stoppedAt) {
       await withLifecycle(() => stopContinuousGroup());
       await withLifecycle(() => prepareReview(tab, { mode: 'continuous' }));
-      flashBadge(tab.id, true, 'Epic Recap');
+      flashBadge(tab.id, true, 'Recap');
       return;
     }
     const session = await getSession();
     if (session && !session.stoppedAt) {
       await withLifecycle(() => stopSession());
       await withLifecycle(() => prepareReview(tab, { mode: 'manual' }));
-      flashBadge(tab.id, true, 'Epic Recap');
+      flashBadge(tab.id, true, 'Recap');
       return;
     }
     if (session?.stoppedAt) {
