@@ -22,7 +22,7 @@ try {
       img{display:block;max-height:610px;max-width:510px;object-fit:contain;border:1px solid #363944;border-radius:16px}
       footer{color:#888d9d;font-size:14px;position:absolute;bottom:28px;left:56px}
       .wide main{display:block;padding-top:20px}.wide h1{font-size:32px;margin:0 0 8px}.wide p{font-size:18px}.wide img{margin:18px auto 0;max-width:1080px;max-height:480px;border-radius:10px}
-      </style><body class="${wide?'wide':''}"><header>RECAP</header><main><section><h1>${title}</h1><p>${description}</p></section><img src="data:image/png;base64,${bytes.toString('base64')}"></main><footer>测试页面演示 · 发布前请检查文字和画面</footer></body></html>`;
+      </style><body class="${wide?'wide':''}"><header>RECAP</header><main><section><h1>${title}</h1><p>${description}</p></section><img src="data:image/png;base64,${bytes.toString('base64')}"></main></body></html>`;
     await page.setContent(html); await page.evaluate(()=>document.fonts.ready);
     await page.locator('img').evaluate(img=>img.decode());
     await page.screenshot({path:`dist/release/screenshots/${name}.jpg`,type:'jpeg',quality:95});
